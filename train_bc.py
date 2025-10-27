@@ -14,6 +14,13 @@ import json
 from data.dataloader import create_dataloader, GeneralsReplayDataset
 from agents.network import SOTANetwork
 
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("Warning: wandb not installed. Logging to wandb is disabled.")
+
 
 class BehaviorCloningTrainer:
     def __init__(self, config_path: str):
@@ -24,6 +31,7 @@ class BehaviorCloningTrainer:
         self.setup_seed()
         self.setup_dirs()
         self.setup_model()
+        self.setup_wandb()
         self.setup_data()
         self.setup_optimizer()
         self.setup_training()
@@ -61,6 +69,26 @@ class BehaviorCloningTrainer:
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"Total parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
+    
+    def setup_wandb(self):
+        if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
+            exp_name = self.config['logging']['experiment_name']
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            wandb.init(
+                project=self.config['logging'].get('wandb_project', 'generals-rl'),
+                name=f"{exp_name}_{timestamp}",
+                config=self.config,
+                dir=str(self.exp_dir),
+                tags=self.config['logging'].get('wandb_tags', []),
+            )
+            wandb.watch(self.model, log='all', log_freq=100)
+            print(f"Wandb initialized: {wandb.run.url}")
+        else:
+            if not WANDB_AVAILABLE:
+                print("Wandb not available (not installed)")
+            else:
+                print("Wandb disabled in config")
     
     def setup_data(self):
         data_config = self.config['data']
@@ -245,6 +273,14 @@ class BehaviorCloningTrainer:
                 'step': self.global_step
             })
             
+            if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
+                wandb.log({
+                    'train/loss': loss.item(),
+                    'train/avg_loss': avg_loss,
+                    'train/learning_rate': self.scheduler.get_last_lr()[0],
+                    'train/step': self.global_step,
+                }, step=self.global_step)
+            
             self.global_step += 1
         
         return total_loss / num_batches
@@ -284,7 +320,14 @@ class BehaviorCloningTrainer:
             avg_loss = total_loss / num_batches
             pbar.set_postfix({'val_loss': f"{avg_loss:.4f}"})
         
-        return total_loss / num_batches
+        final_avg_loss = total_loss / num_batches
+        
+        if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
+            wandb.log({
+                'val/loss': final_avg_loss,
+            }, step=self.global_step)
+        
+        return final_avg_loss
     
     def save_checkpoint(self, epoch: int, val_loss: float):
         ckpt_path = self.ckpt_dir / f"epoch_{epoch}_loss_{val_loss:.4f}.pt"
@@ -339,6 +382,12 @@ class BehaviorCloningTrainer:
             
             with open(self.exp_dir / "metrics.json", 'w') as f:
                 json.dump(self.metrics, f, indent=2)
+        
+        if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
+            wandb.log({
+                'best_val_loss': min(self.metrics['val_loss']),
+            })
+            wandb.finish()
         
         print("\n" + "="*60)
         print(" " * 20 + "Training Complete!")
