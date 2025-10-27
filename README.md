@@ -43,7 +43,7 @@ python download.py
 
 按照论文描述，使用高质量对局进行行为克隆预训练。
 
-#### 配置说明 (`configs/behavior_cloning.yaml`)
+#### 配置说明 (`configs/config_base.yaml`)
 
 ```yaml
 training:
@@ -68,7 +68,7 @@ model:
 #### 启动训练
 ```bash
 cd RL_generals_bots
-python train_bc.py --config configs/behavior_cloning.yaml
+python train_bc.py --config configs/config_base.yaml
 ```
 
 #### 训练输出
