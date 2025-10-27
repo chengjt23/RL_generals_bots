@@ -3,7 +3,7 @@
 ## 目录结构
 
 ```
-RL/
+RL_generals_bots/
 ├── agents/               # 模型定义
 │   ├── __init__.py
 │   ├── memory.py        # 记忆增强
@@ -24,15 +24,17 @@ RL/
 
 ### 安装依赖
 ```bash
+pip install generals-bots
 pip install torch torchvision torchaudio
 pip install pyyaml tqdm
-pip install pyarrow  # 用于读取 parquet 文件
+pip install pyarrow 
 ```
 
 ### 下载数据集
 ```bash
-cd generals-bots
-python RL/data/download.py
+cd RL_generals_bots
+cd data
+python download.py
 ```
 
 ## 训练流程
@@ -65,12 +67,12 @@ model:
 
 #### 启动训练
 ```bash
-cd generals-bots
-python RL/train_bc.py --config RL/configs/behavior_cloning.yaml
+cd RL_generals_bots
+python train_bc.py --config configs/behavior_cloning.yaml
 ```
 
 #### 训练输出
-训练过程会在 `RL/experiments/` 下创建实验目录：
+训练过程会在 `experiments/` 下创建实验目录：
 ```
 experiments/
 └── behavior_cloning_20250128_143022/
@@ -119,13 +121,13 @@ experiments/
 ## 使用训练好的模型
 
 ```python
-from RL.agents import SOTAAgent
+from agents import SOTAAgent
 
 # 加载检查点
 agent = SOTAAgent(
     id="SOTA",
     grid_size=24,
-    model_path="RL/experiments/behavior_cloning_xxx/checkpoints/best_model.pt"
+    model_path="experiments/behavior_cloning_xxx/checkpoints/best_model.pt"
 )
 
 # 在环境中使用
