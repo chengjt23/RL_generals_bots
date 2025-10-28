@@ -378,6 +378,11 @@ class BehaviorCloningTrainer:
                   f"Val: {val_loss:.4f} | "
                   f"LR: {self.scheduler.get_last_lr()[0]:.2e}")
             
+            if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
+                wandb.log({
+                    'epoch': epoch,
+                }, step=self.global_step)
+            
             self.save_checkpoint(epoch, val_loss)
             
             with open(self.exp_dir / "metrics.json", 'w') as f:
