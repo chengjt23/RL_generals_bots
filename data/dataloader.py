@@ -126,9 +126,13 @@ class GeneralsReplayDataset(Dataset):
             action = np.array([0, start_row, start_col, direction, is_half], dtype=np.int8)
             
             if player_idx == 0:
-                samples.append((obs_0, action, 0))
+                obs_0.pad_observation(pad_to=self.grid_size)
+                obs_tensor = obs_0.as_tensor().astype(np.float16, copy=True)
+                samples.append((obs_tensor, action.copy(), 0))
             else:
-                samples.append((obs_1, action, 1))
+                obs_1.pad_observation(pad_to=self.grid_size)
+                obs_tensor = obs_1.as_tensor().astype(np.float16, copy=True)
+                samples.append((obs_tensor, action.copy(), 1))
             
             actions = {
                 "player_0": np.array([1, 0, 0, 0, 0], dtype=np.int8),
@@ -191,12 +195,10 @@ class GeneralsReplayDataset(Dataset):
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
         obs, action, player_idx = self.samples[idx]
-        
-        obs.pad_observation(pad_to=self.grid_size)
-        obs_tensor = torch.from_numpy(obs.as_tensor()).float()
-        
+
+        obs_tensor = torch.from_numpy(obs).to(torch.float32)
         action_tensor = torch.from_numpy(action).long()
-        
+
         return obs_tensor, action_tensor, player_idx
 
 
