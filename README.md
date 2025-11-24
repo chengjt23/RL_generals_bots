@@ -24,10 +24,7 @@ RL_generals_bots/
 
 ### 安装依赖
 ```bash
-pip install generals-bots
-pip install torch torchvision torchaudio
-pip install pyyaml tqdm
-pip install pyarrow 
+pip install -r requirements.txt
 ```
 
 ### 下载数据集
