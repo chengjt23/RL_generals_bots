@@ -1,7 +1,8 @@
 training:
   batch_size: 256
   learning_rate: 0.0004
-  num_epochs: 100
+  num_epochs: 500
+  steps_per_epoch: 20000
   gradient_clip: 1.0
   warmup_steps: 1000
   weight_decay: 0.0001
@@ -14,12 +15,17 @@ training:
   num_workers: 4
   mixed_precision: true
 
+  early_stopping:
+    enabled: true
+    patience: 10
+    min_delta: 0.0
+
 data:
   data_dir: data/generals_io_replays
   grid_size: 24
   min_stars: 70
   max_turns: 500
-  max_replays: null
+  max_replays: 10000
   train_split: 0.95
 
 model:

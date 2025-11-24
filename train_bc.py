@@ -3,7 +3,6 @@ import yaml
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import random_split
 from torch.cuda.amp import autocast, GradScaler
 from pathlib import Path
 from tqdm import tqdm
@@ -11,7 +10,8 @@ import numpy as np
 from datetime import datetime
 import json
 
-from data.dataloader import create_dataloader, GeneralsReplayDataset
+from data.dataloader import GeneralsReplayDataset
+from data.iterable_dataloader import create_iterable_dataloader
 from agents.network import SOTANetwork
 
 try:
@@ -92,31 +92,27 @@ class BehaviorCloningTrainer:
     
     def setup_data(self):
         data_config = self.config['data']
+        train_config = self.config['training']
         
-        full_dataset = GeneralsReplayDataset(
+        train_replays = int(data_config['max_replays'] * data_config['train_split'])
+        val_replays = data_config['max_replays'] - train_replays
+        
+        self.train_loader = create_iterable_dataloader(
             data_dir=data_config['data_dir'],
+            batch_size=train_config['batch_size'],
             grid_size=data_config['grid_size'],
-            max_replays=data_config['max_replays'],
+            num_workers=train_config['num_workers'],
+            max_replays=train_replays,
             min_stars=data_config['min_stars'],
             max_turns=data_config['max_turns'],
         )
         
-        train_size = int(len(full_dataset) * data_config['train_split'])
-        val_size = len(full_dataset) - train_size
-        
-        train_dataset, val_dataset = random_split(
-            full_dataset,
-            [train_size, val_size],
-            generator=torch.Generator().manual_seed(self.config['seed'])
-        )
-        
-        train_config = self.config['training']
-        self.train_loader = torch.utils.data.DataLoader(
-            train_dataset,
-            batch_size=train_config['batch_size'],
-            shuffle=True,
-            num_workers=train_config['num_workers'],
-            pin_memory=True,
+        val_dataset = GeneralsReplayDataset(
+            data_dir=data_config['data_dir'],
+            grid_size=data_config['grid_size'],
+            max_replays=val_replays,
+            min_stars=data_config['min_stars'],
+            max_turns=data_config['max_turns'],
         )
         
         self.val_loader = torch.utils.data.DataLoader(
@@ -127,7 +123,7 @@ class BehaviorCloningTrainer:
             pin_memory=True,
         )
         
-        print(f"Train samples: {len(train_dataset)}")
+        print(f"Train replays (streaming): {train_replays}")
         print(f"Val samples: {len(val_dataset)}")
     
     def setup_optimizer(self):
@@ -141,7 +137,10 @@ class BehaviorCloningTrainer:
         )
         
         scheduler_config = self.config['scheduler']
-        num_training_steps = len(self.train_loader) * self.config['training']['num_epochs']
+        
+        self.steps_per_epoch = self.config['training'].get('steps_per_epoch', 20000)
+        
+        num_training_steps = self.steps_per_epoch * self.config['training']['num_epochs']
         warmup_steps = self.config['training']['warmup_steps']
         
         def lr_lambda(current_step):
@@ -165,6 +164,13 @@ class BehaviorCloningTrainer:
             'val_loss': [],
             'learning_rate': [],
         }
+        
+        early_stop_config = self.config['training'].get('early_stopping', {})
+        self.early_stopping_enabled = early_stop_config.get('enabled', True)
+        self.early_stopping_patience = early_stop_config.get('patience', 10)
+        self.early_stopping_min_delta = early_stop_config.get('min_delta', 0.0)
+        self.best_val_loss = float('inf')
+        self.early_stopping_counter = 0
     
     def compute_loss(self, obs, actions, policy_logits):
         batch_size = obs.shape[0]
@@ -220,7 +226,8 @@ class BehaviorCloningTrainer:
             self.train_loader,
             desc=f"Epoch {epoch}/{self.config['training']['num_epochs']} [Train]",
             unit="batch",
-            leave=False
+            leave=False,
+            total=self.steps_per_epoch
         )
         
         for batch_idx, (obs, actions, _) in enumerate(pbar):
@@ -265,12 +272,14 @@ class BehaviorCloningTrainer:
             total_loss += loss.item()
             num_batches += 1
             
+            if num_batches >= self.steps_per_epoch:
+                break
+            
             avg_loss = total_loss / num_batches
             pbar.set_postfix({
                 'loss': f"{loss.item():.4f}",
                 'avg_loss': f"{avg_loss:.4f}",
-                'lr': f"{self.scheduler.get_last_lr()[0]:.2e}",
-                'step': self.global_step
+                'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
@@ -359,8 +368,13 @@ class BehaviorCloningTrainer:
         print(f"Experiment: {self.exp_dir.name}")
         print(f"Device: {self.device}")
         print(f"Epochs: {self.config['training']['num_epochs']}")
+        print(f"Steps per epoch: {self.steps_per_epoch}")
         print(f"Batch size: {self.config['training']['batch_size']}")
         print(f"Learning rate: {self.config['training']['learning_rate']}")
+        if self.early_stopping_enabled:
+            print(f"Early stopping: enabled (patience={self.early_stopping_patience}, min_delta={self.early_stopping_min_delta})")
+        else:
+            print(f"Early stopping: disabled")
         print("="*60 + "\n")
         
         num_epochs = self.config['training']['num_epochs']
@@ -387,6 +401,17 @@ class BehaviorCloningTrainer:
             
             with open(self.exp_dir / "metrics.json", 'w') as f:
                 json.dump(self.metrics, f, indent=2)
+            
+            if self.early_stopping_enabled:
+                if val_loss < self.best_val_loss - self.early_stopping_min_delta:
+                    self.best_val_loss = val_loss
+                    self.early_stopping_counter = 0
+                else:
+                    self.early_stopping_counter += 1
+                    if self.early_stopping_counter >= self.early_stopping_patience:
+                        print(f"\nEarly stopping triggered after {epoch} epochs")
+                        print(f"Best validation loss: {self.best_val_loss:.4f}")
+                        break
         
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
             wandb.log({
