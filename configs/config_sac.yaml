@@ -1,0 +1,52 @@
+experiment:
+  name: "sac_from_bc"
+  bc_pretrain_path: "experiments/behavior_cloning_20251028_010911/checkpoints/best_model.pt"
+  save_dir: "experiments"
+
+model:
+  grid_size: 24
+  obs_channels: 15
+  memory_channels: 18
+  base_channels: 64
+
+training:
+  device: "cuda"
+  seed: 42
+  
+  gamma: 0.99
+  tau: 0.005
+  alpha: 0.2
+  auto_tune_alpha: true
+  
+  total_timesteps: 1000000
+  batch_size: 128
+  buffer_size: 100000
+  learning_starts: 10000
+  update_frequency: 1
+  gradient_steps: 1
+  
+  actor_lr: 0.0003
+  critic_lr: 0.0003
+  alpha_lr: 0.0003
+  
+  eval_frequency: 10000
+  save_frequency: 50000
+  log_frequency: 1000
+
+environment:
+  max_episode_steps: 500
+  num_parallel_envs: 1
+
+reward:
+  type: "potential_based"
+  land_weight: 0.3
+  army_weight: 0.3
+  castle_weight: 0.4
+  max_ratio: 100.0
+  gamma: 0.99
+
+logging:
+  use_wandb: true
+  project_name: "generals-rl"
+  wandb_entity: null
+
