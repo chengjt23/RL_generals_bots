@@ -12,7 +12,7 @@ class ReplayBuffer:
         
         self.observations = np.zeros((capacity, *obs_shape), dtype=np.float32)
         self.memories = np.zeros((capacity, *memory_shape), dtype=np.float32)
-        self.actions = np.zeros((capacity, 4), dtype=np.int32)
+        self.actions = np.zeros((capacity, 5), dtype=np.int32)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.next_observations = np.zeros((capacity, *obs_shape), dtype=np.float32)
         self.next_memories = np.zeros((capacity, *memory_shape), dtype=np.float32)

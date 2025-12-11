@@ -180,7 +180,7 @@ class SACAgent(Agent):
         q1_flat = q1.view(batch_size, 9, h * w)
         q2_flat = q2.view(batch_size, 9, h * w)
         
-        actions_idx = actions[:, 0] * w + actions[:, 1]
+        actions_idx = actions[:, 1] * w + actions[:, 2]
         actions_expanded = actions_idx.unsqueeze(1)
         q1_pred = torch.gather(q1_flat, 1, actions_expanded).squeeze(1)
         q2_pred = torch.gather(q2_flat, 1, actions_expanded).squeeze(1)
