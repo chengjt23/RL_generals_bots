@@ -230,17 +230,10 @@ class BehaviorCloningTrainer:
             total=self.steps_per_epoch
         )
         
-        for batch_idx, (obs, actions, _) in enumerate(pbar):
+        for batch_idx, (obs, memory, actions, _) in enumerate(pbar):
             obs = obs.to(self.device)
+            memory = memory.to(self.device)
             actions = actions.to(self.device)
-            
-            memory = torch.zeros(
-                obs.shape[0],
-                self.config['model']['memory_channels'],
-                self.config['model']['grid_size'],
-                self.config['model']['grid_size'],
-                device=self.device
-            )
             
             self.optimizer.zero_grad()
             
@@ -308,17 +301,10 @@ class BehaviorCloningTrainer:
             leave=False
         )
         
-        for obs, actions, _ in pbar:
+        for obs, memory, actions, _ in pbar:
             obs = obs.to(self.device)
+            memory = memory.to(self.device)
             actions = actions.to(self.device)
-            
-            memory = torch.zeros(
-                obs.shape[0],
-                self.config['model']['memory_channels'],
-                self.config['model']['grid_size'],
-                self.config['model']['grid_size'],
-                device=self.device
-            )
             
             policy_logits, _ = self.model(obs, memory)
             loss = self.compute_loss(obs, actions, policy_logits)

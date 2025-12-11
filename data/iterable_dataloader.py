@@ -6,6 +6,7 @@ from typing import List, Tuple, Dict, Any, Iterator
 from generals.core.grid import Grid
 from generals.core.game import Game
 from generals.core.observation import Observation
+from agents.memory import MemoryAugmentation
 
 
 class GeneralsReplayIterableDataset(IterableDataset):
@@ -81,10 +82,11 @@ class GeneralsReplayIterableDataset(IterableDataset):
                     valid_replay_count += 1
                     
                     for sample in self._extract_samples_from_replay(replay):
-                        obs, action, player_idx = sample
+                        obs, memory, action, player_idx = sample
                         obs_tensor = torch.from_numpy(obs).to(torch.float32)
+                        memory_tensor = torch.from_numpy(memory).to(torch.float32)
                         action_tensor = torch.from_numpy(action).long()
-                        yield obs_tensor, action_tensor, player_idx
+                        yield obs_tensor, memory_tensor, action_tensor, player_idx
         else:
             per_worker = self.num_replays // w_num
             start_idx = w_id * per_worker
@@ -99,10 +101,11 @@ class GeneralsReplayIterableDataset(IterableDataset):
                     continue
                 
                 for sample in self._extract_samples_from_replay(replay):
-                    obs, action, player_idx = sample
+                    obs, memory, action, player_idx = sample
                     obs_tensor = torch.from_numpy(obs).to(torch.float32)
+                    memory_tensor = torch.from_numpy(memory).to(torch.float32)
                     action_tensor = torch.from_numpy(action).long()
-                    yield obs_tensor, action_tensor, player_idx
+                    yield obs_tensor, memory_tensor, action_tensor, player_idx
     
     def _is_valid_replay(self, replay: Dict) -> bool:
         if len(replay['moves']) > self.max_turns:
@@ -123,6 +126,10 @@ class GeneralsReplayIterableDataset(IterableDataset):
             game = Game(grid, ["player_0", "player_1"])
         except Exception:
             return
+        
+        # Initialize memory augmentation for both players
+        memory_0 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
+        memory_1 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
         
         for move in replay['moves']:
             if len(move) < 5:
@@ -146,15 +153,19 @@ class GeneralsReplayIterableDataset(IterableDataset):
                 continue
             
             action = np.array([0, start_row, start_col, direction, is_half], dtype=np.int8)
+            action_pass = np.array([1, 0, 0, 0, 0], dtype=np.int8)
             
+            # Get current memory features before taking action
             if player_idx == 0:
                 obs_0.pad_observation(pad_to=self.grid_size)
                 obs_tensor = obs_0.as_tensor().astype(np.float32, copy=True)
-                yield (obs_tensor, action.copy(), 0)
+                memory_features = memory_0.get_memory_features().astype(np.float32, copy=True)
+                yield (obs_tensor, memory_features, action.copy(), 0)
             else:
                 obs_1.pad_observation(pad_to=self.grid_size)
                 obs_tensor = obs_1.as_tensor().astype(np.float32, copy=True)
-                yield (obs_tensor, action.copy(), 1)
+                memory_features = memory_1.get_memory_features().astype(np.float32, copy=True)
+                yield (obs_tensor, memory_features, action.copy(), 1)
             
             actions = {
                 "player_0": np.array([1, 0, 0, 0, 0], dtype=np.int8),
@@ -168,6 +179,19 @@ class GeneralsReplayIterableDataset(IterableDataset):
             
             try:
                 game.step(actions)
+                
+                # Update memory augmentation after step
+                obs_0_after = game.agent_observation("player_0")
+                obs_1_after = game.agent_observation("player_1")
+                obs_0_after.pad_observation(pad_to=self.grid_size)
+                obs_1_after.pad_observation(pad_to=self.grid_size)
+                
+                # Convert observations to dict format for memory update
+                obs_0_dict = self._obs_to_dict(obs_0_after)
+                obs_1_dict = self._obs_to_dict(obs_1_after)
+                
+                memory_0.update(obs_0_dict, actions["player_0"], actions["player_1"])
+                memory_1.update(obs_1_dict, actions["player_1"], actions["player_0"])
             except Exception:
                 break
     
@@ -209,6 +233,18 @@ class GeneralsReplayIterableDataset(IterableDataset):
         elif end_row == start_row and end_col > start_col:
             return 3
         return -1
+    
+    def _obs_to_dict(self, obs: Observation) -> Dict:
+        """Convert Observation to dict format needed by MemoryAugmentation"""
+        tensor = obs.as_tensor()
+        return {
+            'fog_cells': tensor[0],
+            'structures_in_fog': tensor[1],
+            'cities': tensor[2],
+            'generals': tensor[3],
+            'owned_cells': tensor[4],
+            'opponent_cells': tensor[5],
+        }
 
 
 def create_iterable_dataloader(
