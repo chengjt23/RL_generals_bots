@@ -9,7 +9,8 @@ from tqdm import tqdm
 from agents.sac_agent import SACAgent
 from agents.replay_buffer import ReplayBuffer
 from agents.reward_shaping import PotentialBasedRewardFn
-from generals import gym as generals_gym
+from generals.envs import PettingZooGenerals
+from generals.agents import RandomAgent
 
 try:
     import wandb
@@ -50,7 +51,8 @@ class SACTrainer:
             yaml.dump(self.config, f)
     
     def setup_env(self):
-        self.env = generals_gym.make("Generals-v0", agents=["SAC", "RandomAgent"])
+        self.env = PettingZooGenerals(agents=["SAC", "RandomAgent"], render_mode=None)
+        self.opponent = RandomAgent()
     
     def setup_agent(self):
         self.agent = SACAgent(
@@ -118,35 +120,39 @@ class SACTrainer:
         pbar = tqdm(total=total_timesteps, desc="Training")
         
         while global_step < total_timesteps:
-            obs = self.env.reset()
+            obs_dict, info = self.env.reset()
             self.agent.reset()
             episode_reward = 0
             episode_length = 0
-            done = False
+            terminated = truncated = False
             
-            prior_obs = obs[0]
+            prior_obs = obs_dict["SAC"]
             
-            while not done and episode_length < max_episode_steps:
-                action = self.agent.act(obs[0], deterministic=False)
-                next_obs, _, done, info = self.env.step([action, None])
+            while not (terminated or truncated) and episode_length < max_episode_steps:
+                sac_action = self.agent.act(obs_dict["SAC"], deterministic=False)
+                opponent_action = self.opponent.act(obs_dict["RandomAgent"])
                 
-                reward = self.reward_fn(prior_obs, action, next_obs[0])
+                actions_dict = {"SAC": sac_action, "RandomAgent": opponent_action}
+                next_obs_dict, rewards_dict, terminated, truncated, info = self.env.step(actions_dict)
                 
-                obs_tensor = self.agent._prepare_observation(obs[0]).squeeze(0).cpu().numpy()
+                reward = self.reward_fn(prior_obs, sac_action, next_obs_dict["SAC"])
+                
+                obs_tensor = self.agent._prepare_observation(obs_dict["SAC"]).squeeze(0).cpu().numpy()
                 memory_tensor = self.agent._prepare_memory().squeeze(0).cpu().numpy()
-                next_obs_tensor = self.agent._prepare_observation(next_obs[0]).squeeze(0).cpu().numpy()
-                self.agent.memory.update(self.agent._obs_to_dict(next_obs[0]), action, self.agent.opponent_last_action)
+                next_obs_tensor = self.agent._prepare_observation(next_obs_dict["SAC"]).squeeze(0).cpu().numpy()
+                self.agent.memory.update(self.agent._obs_to_dict(next_obs_dict["SAC"]), sac_action, opponent_action)
                 next_memory_tensor = self.agent._prepare_memory().squeeze(0).cpu().numpy()
                 
-                action_array = np.array([action.row if not action.to_pass else -1, 
-                                        action.col if not action.to_pass else -1,
-                                        action.direction if not action.to_pass else -1,
-                                        int(action.to_split) if not action.to_pass else 0], dtype=np.int32)
+                action_array = np.array([sac_action.row if not sac_action.to_pass else -1, 
+                                        sac_action.col if not sac_action.to_pass else -1,
+                                        sac_action.direction if not sac_action.to_pass else -1,
+                                        int(sac_action.to_split) if not sac_action.to_pass else 0], dtype=np.int32)
                 
+                done = terminated or truncated
                 self.replay_buffer.store(obs_tensor, memory_tensor, action_array, reward, next_obs_tensor, next_memory_tensor, float(done))
                 
-                obs = next_obs
-                prior_obs = next_obs[0]
+                obs_dict = next_obs_dict
+                prior_obs = next_obs_dict["SAC"]
                 episode_reward += reward
                 episode_length += 1
                 global_step += 1

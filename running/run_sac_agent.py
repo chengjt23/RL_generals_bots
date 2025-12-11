@@ -3,7 +3,8 @@ sys.path.append('..')
 
 import torch
 from agents.sac_agent import SACAgent
-from generals import gym as generals_gym
+from generals.envs import PettingZooGenerals
+from generals.agents import RandomAgent
 
 
 def run_sac_game(checkpoint_path=None, bc_model_path=None, num_games=5):
@@ -22,30 +23,34 @@ def run_sac_game(checkpoint_path=None, bc_model_path=None, num_games=5):
     
     agent.actor.eval()
     
-    env = generals_gym.make("Generals-v0", agents=["SAC", "RandomAgent"])
+    env = PettingZooGenerals(agents=["SAC", "RandomAgent"], render_mode=None)
+    opponent = RandomAgent()
     
     wins = 0
     total_rewards = 0
     
     for game_num in range(num_games):
-        obs = env.reset()
+        obs_dict, info = env.reset()
         agent.reset()
-        done = False
+        terminated = truncated = False
         episode_reward = 0
         step = 0
         
         print(f"\nGame {game_num + 1}/{num_games}")
         
-        while not done:
-            action = agent.act(obs[0], deterministic=True)
-            obs, reward, done, info = env.step([action, None])
-            episode_reward += reward[0]
+        while not (terminated or truncated):
+            sac_action = agent.act(obs_dict["SAC"], deterministic=True)
+            opponent_action = opponent.act(obs_dict["RandomAgent"])
+            actions_dict = {"SAC": sac_action, "RandomAgent": opponent_action}
+            
+            obs_dict, rewards_dict, terminated, truncated, info = env.step(actions_dict)
+            episode_reward += rewards_dict["SAC"]
             step += 1
             
             if step % 50 == 0:
                 print(f"  Step {step}: Reward = {episode_reward:.2f}")
         
-        if info['result'] == 0:
+        if rewards_dict["SAC"] > rewards_dict["RandomAgent"]:
             wins += 1
             print(f"  Result: WIN")
         else:

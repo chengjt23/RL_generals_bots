@@ -2,35 +2,40 @@ import torch
 import numpy as np
 from agents.sota_agent import SOTAAgent
 from agents.sac_agent import SACAgent
-from generals import gym as generals_gym
+from generals.envs import PettingZooGenerals
+from generals.agents import RandomAgent
 from tqdm import tqdm
 
 
 def evaluate_agent(agent, num_games=20, opponent="RandomAgent"):
-    env = generals_gym.make("Generals-v0", agents=[agent.id, opponent])
+    env = PettingZooGenerals(agents=[agent.id, opponent], render_mode=None)
+    opponent_agent = RandomAgent()
     
     wins = 0
     total_rewards = 0
     episode_lengths = []
     
     for game_num in tqdm(range(num_games), desc=f"Evaluating {agent.id}"):
-        obs = env.reset()
+        obs_dict, info = env.reset()
         agent.reset()
-        done = False
+        terminated = truncated = False
         episode_reward = 0
         step = 0
         
-        while not done and step < 500:
+        while not (terminated or truncated) and step < 500:
             if isinstance(agent, SACAgent):
-                action = agent.act(obs[0], deterministic=True)
+                agent_action = agent.act(obs_dict[agent.id], deterministic=True)
             else:
-                action = agent.act(obs[0])
+                agent_action = agent.act(obs_dict[agent.id])
             
-            obs, reward, done, info = env.step([action, None])
-            episode_reward += reward[0]
+            opponent_action = opponent_agent.act(obs_dict[opponent])
+            actions_dict = {agent.id: agent_action, opponent: opponent_action}
+            
+            obs_dict, rewards_dict, terminated, truncated, info = env.step(actions_dict)
+            episode_reward += rewards_dict[agent.id]
             step += 1
         
-        if info['result'] == 0:
+        if rewards_dict[agent.id] > rewards_dict[opponent]:
             wins += 1
         
         total_rewards += episode_reward
