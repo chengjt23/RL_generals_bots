@@ -161,53 +161,66 @@ class SACAgent(Agent):
         dones = batch['dones']
         
         with torch.no_grad():
-            next_actions, next_log_probs, _ = self.actor.get_action_and_log_prob(next_obs, next_memory)
+            next_policy_logits = self.actor(next_obs, next_memory)
             q1_next = self.critic_1_target(next_obs, next_memory)
             q2_next = self.critic_2_target(next_obs, next_memory)
             min_q_next = torch.min(q1_next, q2_next)
             
             batch_size = obs.size(0)
             h, w = min_q_next.shape[2], min_q_next.shape[3]
-            min_q_next_flat = min_q_next.view(batch_size, 9, h * w)
-            next_actions_expanded = next_actions.unsqueeze(1)
-            next_q_values = torch.gather(min_q_next_flat, 1, next_actions_expanded).squeeze(1)
+            
+            next_policy_probs = F.softmax(next_policy_logits.view(batch_size, -1), dim=-1)
+            next_log_probs = F.log_softmax(next_policy_logits.view(batch_size, -1), dim=-1)
+            min_q_next_flat = min_q_next.view(batch_size, -1)
             
             alpha = self.log_alpha.exp()
-            target_q = rewards.unsqueeze(1) + (1 - dones.unsqueeze(1)) * self.gamma * (next_q_values - alpha * next_log_probs)
+            next_q_value = (next_policy_probs * (min_q_next_flat - alpha * next_log_probs)).sum(dim=-1)
+            target_q = rewards + (1 - dones) * self.gamma * next_q_value
         
         q1 = self.critic_1(obs, memory)
         q2 = self.critic_2(obs, memory)
-        q1_flat = q1.view(batch_size, 9, h * w)
-        q2_flat = q2.view(batch_size, 9, h * w)
         
-        actions_idx = actions[:, 1] * w + actions[:, 2]
-        actions_expanded = actions_idx.unsqueeze(1)
-        q1_pred = torch.gather(q1_flat, 1, actions_expanded).squeeze(1)
-        q2_pred = torch.gather(q2_flat, 1, actions_expanded).squeeze(1)
+        is_pass = actions[:, 0]
+        rows = torch.clamp(actions[:, 1], 0, h - 1)
+        cols = torch.clamp(actions[:, 2], 0, w - 1)
+        directions = actions[:, 3]
+        splits = actions[:, 4]
         
-        critic_loss = F.mse_loss(q1_pred, target_q.mean(dim=1)) + F.mse_loss(q2_pred, target_q.mean(dim=1))
+        action_channel = torch.where(
+            is_pass == 1,
+            torch.zeros_like(is_pass),
+            1 + directions * 2 + splits
+        )
+        
+        batch_indices = torch.arange(batch_size, device=obs.device)
+        q1_pred = q1[batch_indices, action_channel, rows, cols]
+        q2_pred = q2[batch_indices, action_channel, rows, cols]
+        
+        critic_loss = F.mse_loss(q1_pred, target_q) + F.mse_loss(q2_pred, target_q)
         
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
         
-        curr_actions, log_probs, entropy = self.actor.get_action_and_log_prob(obs, memory)
+        policy_logits = self.actor(obs, memory)
         q1_new = self.critic_1(obs, memory)
         q2_new = self.critic_2(obs, memory)
         min_q_new = torch.min(q1_new, q2_new)
-        min_q_new_flat = min_q_new.view(batch_size, 9, h * w)
-        curr_actions_expanded = curr_actions.unsqueeze(1)
-        q_values = torch.gather(min_q_new_flat, 1, curr_actions_expanded).squeeze(1)
+        
+        policy_probs = F.softmax(policy_logits.view(batch_size, -1), dim=-1)
+        log_probs = F.log_softmax(policy_logits.view(batch_size, -1), dim=-1)
+        min_q_new_flat = min_q_new.view(batch_size, -1)
         
         alpha = self.log_alpha.exp()
-        actor_loss = (alpha * log_probs - q_values).mean()
+        actor_loss = (policy_probs * (alpha * log_probs - min_q_new_flat)).sum(dim=-1).mean()
         
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
         
         if self.auto_tune_alpha:
-            alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
+            entropy = -(policy_probs * log_probs).sum(dim=-1).mean()
+            alpha_loss = -(self.log_alpha * (entropy - self.target_entropy).detach())
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
@@ -219,7 +232,7 @@ class SACAgent(Agent):
             'critic_loss': critic_loss.item(),
             'actor_loss': actor_loss.item(),
             'alpha': alpha.item(),
-            'entropy': entropy.mean().item()
+            'entropy': entropy.item() if self.auto_tune_alpha else 0.0
         }
     
     def _soft_update(self, source, target):
