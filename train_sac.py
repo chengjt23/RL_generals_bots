@@ -19,6 +19,15 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 
+def action_to_array(action):
+    try:
+        if action.row is not None:
+            return np.array([0, action.row, action.col, action.direction, int(action.split)], dtype=np.int32)
+    except (AttributeError, TypeError):
+        pass
+    return np.array([1, 0, 0, 0, 0], dtype=np.int32)
+
+
 class SACTrainer:
     def __init__(self, config_path: str):
         with open(config_path, 'r') as f:
@@ -143,10 +152,7 @@ class SACTrainer:
                 self.agent.memory.update(self.agent._obs_to_dict(next_obs_dict["SAC"]), sac_action, opponent_action)
                 next_memory_tensor = self.agent._prepare_memory().squeeze(0).cpu().numpy()
                 
-                action_array = np.array([sac_action.row if not sac_action.to_pass else -1, 
-                                        sac_action.col if not sac_action.to_pass else -1,
-                                        sac_action.direction if not sac_action.to_pass else -1,
-                                        int(sac_action.to_split) if not sac_action.to_pass else 0], dtype=np.int32)
+                action_array = action_to_array(sac_action)
                 
                 done = terminated or truncated
                 self.replay_buffer.store(obs_tensor, memory_tensor, action_array, reward, next_obs_tensor, next_memory_tensor, float(done))
