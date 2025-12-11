@@ -57,7 +57,7 @@ except Exception as e:
 print("\n3. Testing Training Components...")
 try:
     import yaml
-    with open("configs/behavior_cloning.yaml", 'r') as f:
+    with open("configs/config_large.yaml", 'r') as f:
         config = yaml.safe_load(f)
     print(f"   ✓ Config loaded")
     

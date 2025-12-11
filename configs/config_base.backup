@@ -1,10 +1,10 @@
 training:
-  batch_size: 128
-  learning_rate: 0.0003
+  batch_size: 256
+  learning_rate: 0.0004
   num_epochs: 500
-  steps_per_epoch: 10000
+  steps_per_epoch: 20000
   gradient_clip: 1.0
-  warmup_steps: 2000
+  warmup_steps: 1000
   weight_decay: 0.0001
   
   save_top_k: 5
@@ -30,7 +30,7 @@ data:
 
 model:
   obs_channels: 15
-  memory_channels: 18
+  memory_channels: 0
   base_channels: 64
   grid_size: 24
 

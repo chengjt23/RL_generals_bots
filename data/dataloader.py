@@ -38,6 +38,7 @@ class GeneralsReplayDataset(Dataset):
             self.num_replays = len(df)
             self.table = None
         
+        print("self.num_replays = ", self.num_replays)
         if max_replays is not None:
             self.num_replays = min(self.num_replays, max_replays)
         

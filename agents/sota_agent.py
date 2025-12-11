@@ -16,6 +16,7 @@ class SOTAAgent(Agent):
         grid_size: int = 24,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         model_path: str | None = None,
+        memory_channels: int = 18,
     ):
         super().__init__(id)
         self.grid_size = grid_size
@@ -23,13 +24,18 @@ class SOTAAgent(Agent):
         
         self.network = SOTANetwork(
             obs_channels=15,
-            memory_channels=18,
+            memory_channels=memory_channels,
             grid_size=grid_size,
             base_channels=64,
         ).to(self.device)
         
         if model_path is not None:
-            self.network.load_state_dict(torch.load(model_path, map_location=self.device))
+            ckpt = torch.load(model_path, map_location=self.device, weights_only=False)
+            if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
+                state = ckpt['model_state_dict']
+            else:
+                state = ckpt
+            self.network.load_state_dict(state)
         
         self.network.eval()
         
