@@ -1,6 +1,6 @@
 experiment:
   name: "sac_from_bc"
-  bc_pretrain_path: "experiments/behavior_cloning_20251028_010911/checkpoints/best_model.pt"
+  bc_pretrain_path: "./experiments/epoch_12_loss_1.6968.pt"
   save_dir: "experiments"
 
 model:
