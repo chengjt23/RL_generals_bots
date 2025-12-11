@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
+import copy
 
 from agents.sac_agent import SACAgent
 from agents.replay_buffer import ReplayBuffer
@@ -26,6 +27,48 @@ def action_to_array(action):
     except (AttributeError, TypeError):
         pass
     return np.array([1, 0, 0, 0, 0], dtype=np.int32)
+
+
+class OpponentPool:
+    def __init__(self, max_size=10):
+        self.pool = []
+        self.max_size = max_size
+        self.pool_stats = []
+    
+    def add_opponent(self, agent, step, description=""):
+        frozen_agent = copy.deepcopy(agent)
+        frozen_agent.actor.eval()
+        for param in frozen_agent.actor.parameters():
+            param.requires_grad = False
+        
+        self.pool.append(frozen_agent)
+        self.pool_stats.append({
+            'step': step,
+            'description': description,
+            'usage_count': 0
+        })
+        
+        if len(self.pool) > self.max_size:
+            self.pool.pop(0)
+            self.pool_stats.pop(0)
+        
+        print(f"[Opponent Pool] Added agent from step {step}. Pool size: {len(self.pool)}")
+    
+    def sample_opponent(self):
+        if not self.pool:
+            return None
+        
+        idx = np.random.randint(0, len(self.pool))
+        self.pool_stats[idx]['usage_count'] += 1
+        return self.pool[idx]
+    
+    def get_recent_opponent(self):
+        if not self.pool:
+            return None
+        return self.pool[-1]
+    
+    def __len__(self):
+        return len(self.pool)
 
 
 class SACTrainer:
@@ -60,8 +103,13 @@ class SACTrainer:
             yaml.dump(self.config, f)
     
     def setup_env(self):
-        self.env = PettingZooGenerals(agents=["SAC", "RandomAgent"], render_mode=None)
-        self.opponent = RandomAgent()
+        self.env = PettingZooGenerals(agents=["SAC", "Opponent"], render_mode=None)
+        self.random_opponent = RandomAgent()
+        self.opponent_pool = OpponentPool(max_size=10)
+        
+        self.self_play_start = self.config['training'].get('self_play_start', 100000)
+        self.pool_update_freq = self.config['training'].get('pool_update_frequency', 10000)
+        self.random_prob_after_selfplay = self.config['training'].get('random_prob_after_selfplay', 0.2)
     
     def setup_agent(self):
         self.agent = SACAgent(
@@ -128,9 +176,20 @@ class SACTrainer:
         
         pbar = tqdm(total=total_timesteps, desc="Training")
         
+        print(f"\nTraining Plan:")
+        print(f"  0-{self.self_play_start}: vs RandomAgent")
+        print(f"  {self.self_play_start}+: vs Self-play (Opponent Pool)")
+        print(f"  Pool update frequency: every {self.pool_update_freq} steps")
+        print(f"  Random opponent probability after self-play: {self.random_prob_after_selfplay*100}%\n")
+        
         while global_step < total_timesteps:
+            current_opponent, opponent_type = self._get_opponent(global_step)
+            
             obs_dict, info = self.env.reset()
             self.agent.reset()
+            if hasattr(current_opponent, 'reset'):
+                current_opponent.reset()
+            
             episode_reward = 0
             episode_length = 0
             terminated = truncated = False
@@ -139,9 +198,13 @@ class SACTrainer:
             
             while not (terminated or truncated) and episode_length < max_episode_steps:
                 sac_action = self.agent.act(obs_dict["SAC"], deterministic=False)
-                opponent_action = self.opponent.act(obs_dict["RandomAgent"])
                 
-                actions_dict = {"SAC": sac_action, "RandomAgent": opponent_action}
+                if opponent_type == "Self":
+                    opponent_action = current_opponent.act(obs_dict["Opponent"], deterministic=True)
+                else:
+                    opponent_action = current_opponent.act(obs_dict["Opponent"])
+                
+                actions_dict = {"SAC": sac_action, "Opponent": opponent_action}
                 next_obs_dict, rewards_dict, terminated, truncated, info = self.env.step(actions_dict)
                 
                 reward = self.reward_fn(prior_obs, sac_action, next_obs_dict["SAC"])
@@ -172,6 +235,13 @@ class SACTrainer:
                         if global_step % self.config['training']['log_frequency'] == 0:
                             if self.use_wandb:
                                 wandb.log(metrics, step=global_step)
+                
+                if global_step >= self.self_play_start and global_step % self.pool_update_freq == 0:
+                    self.opponent_pool.add_opponent(
+                        self.agent,
+                        global_step,
+                        f"checkpoint_{global_step}"
+                    )
             
             episode_rewards.append(episode_reward)
             episode_lengths.append(episode_length)
@@ -180,14 +250,21 @@ class SACTrainer:
             if episode_num % 10 == 0:
                 avg_reward = np.mean(episode_rewards[-10:])
                 avg_length = np.mean(episode_lengths[-10:])
-                pbar.set_postfix({'avg_reward': f'{avg_reward:.2f}', 'avg_length': f'{avg_length:.0f}'})
+                pbar.set_postfix({
+                    'avg_reward': f'{avg_reward:.2f}', 
+                    'avg_length': f'{avg_length:.0f}',
+                    'pool_size': len(self.opponent_pool),
+                    'opp': opponent_type
+                })
                 
                 if self.use_wandb:
                     wandb.log({
                         'episode_reward': episode_reward,
                         'avg_reward_10': avg_reward,
                         'episode_length': episode_length,
-                        'episode': episode_num
+                        'episode': episode_num,
+                        'opponent_pool_size': len(self.opponent_pool),
+                        'opponent_type': 1 if opponent_type == "Self" else 0
                     }, step=global_step)
             
             if global_step % self.config['training']['save_frequency'] == 0:
@@ -195,7 +272,27 @@ class SACTrainer:
         
         pbar.close()
         self.save_checkpoint('final')
+        
+        if len(self.opponent_pool) > 0:
+            print("\n" + "="*60)
+            print("Opponent Pool Statistics:")
+            for i, stats in enumerate(self.opponent_pool.pool_stats):
+                print(f"  Agent {i+1}: Step {stats['step']}, Used {stats['usage_count']} times")
+            print("="*60)
+        
         self.env.close()
+    
+    def _get_opponent(self, step):
+        if step < self.self_play_start:
+            return self.random_opponent, "Random"
+        
+        if len(self.opponent_pool) == 0:
+            return self.random_opponent, "Random"
+        
+        if np.random.random() < self.random_prob_after_selfplay:
+            return self.random_opponent, "Random"
+        else:
+            return self.opponent_pool.sample_opponent(), "Self"
     
     def save_checkpoint(self, step):
         checkpoint = {

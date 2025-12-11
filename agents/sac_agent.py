@@ -46,7 +46,8 @@ class SACAgent(Agent):
         self.critic_2_target.load_state_dict(self.critic_2.state_dict())
         
         self.log_alpha = nn.Parameter(torch.tensor(np.log(alpha), device=self.device))
-        self.target_entropy = -np.log(1.0 / 9) * 0.98
+        action_space_size = 9 * grid_size * grid_size
+        self.target_entropy = -np.log(1.0 / action_space_size) * 0.98
         
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(list(self.critic_1.parameters()) + list(self.critic_2.parameters()), lr=critic_lr)
