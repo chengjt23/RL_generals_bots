@@ -16,6 +16,11 @@ class MemoryAugmentation:
         self.action_history = deque(maxlen=self.history_length * 2)
 
     def update(self, observation: dict, action_agent, action_opponent):
+        obs_shape = observation["fog_cells"].shape
+        if obs_shape != self.grid_shape:
+            self.grid_shape = obs_shape
+            self.reset()
+        
         visible_mask = 1 - observation["fog_cells"] - observation["structures_in_fog"]
         
         castles_mask = observation["cities"]

@@ -109,6 +109,16 @@ class SACAgent(Agent):
     
     def _prepare_memory(self) -> torch.Tensor:
         memory_features = self.memory.get_memory_features()
+        
+        current_h, current_w = memory_features.shape[1], memory_features.shape[2]
+        if current_h < self.grid_size or current_w < self.grid_size:
+            pad_h = max(0, self.grid_size - current_h)
+            pad_w = max(0, self.grid_size - current_w)
+            memory_features = np.pad(memory_features, 
+                                    ((0, 0), (0, pad_h), (0, pad_w)), 
+                                    mode='constant', 
+                                    constant_values=0)
+        
         memory_tensor = torch.from_numpy(memory_features).float().unsqueeze(0).to(self.device)
         return memory_tensor
     

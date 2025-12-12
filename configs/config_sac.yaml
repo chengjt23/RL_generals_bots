@@ -25,9 +25,10 @@ training:
   update_frequency: 1
   gradient_steps: 1
   
-  self_play_start: 100000
+  self_play_start: 0
   pool_update_frequency: 10000
-  random_prob_after_selfplay: 0.2
+  random_prob_after_selfplay: 0.0
+  initial_pool_steps: 10000
   
   actor_lr: 0.0003
   critic_lr: 0.0003

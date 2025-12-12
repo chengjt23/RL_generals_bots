@@ -107,9 +107,10 @@ class SACTrainer:
         self.random_opponent = RandomAgent()
         self.opponent_pool = OpponentPool(max_size=10)
         
-        self.self_play_start = self.config['training'].get('self_play_start', 100000)
+        self.self_play_start = self.config['training'].get('self_play_start', 0)
         self.pool_update_freq = self.config['training'].get('pool_update_frequency', 10000)
-        self.random_prob_after_selfplay = self.config['training'].get('random_prob_after_selfplay', 0.2)
+        self.random_prob_after_selfplay = self.config['training'].get('random_prob_after_selfplay', 0.0)
+        self.initial_pool_steps = self.config['training'].get('initial_pool_steps', 10000)
     
     def setup_agent(self):
         self.agent = SACAgent(
@@ -177,10 +178,18 @@ class SACTrainer:
         pbar = tqdm(total=total_timesteps, desc="Training")
         
         print(f"\nTraining Plan:")
-        print(f"  0-{self.self_play_start}: vs RandomAgent")
-        print(f"  {self.self_play_start}+: vs Self-play (Opponent Pool)")
+        if self.self_play_start > 0:
+            print(f"  0-{self.self_play_start}: vs RandomAgent")
+            print(f"  {self.self_play_start}+: vs Self-play (Opponent Pool)")
+        else:
+            print(f"  Pure Self-play from start")
+            print(f"  0-{self.initial_pool_steps}: Build initial pool")
         print(f"  Pool update frequency: every {self.pool_update_freq} steps")
-        print(f"  Random opponent probability after self-play: {self.random_prob_after_selfplay*100}%\n")
+        if self.random_prob_after_selfplay > 0:
+            print(f"  Random opponent probability: {self.random_prob_after_selfplay*100}%")
+        else:
+            print(f"  Pure self-play (no random opponent)")
+        print()
         
         while global_step < total_timesteps:
             current_opponent, opponent_type = self._get_opponent(global_step)
@@ -236,7 +245,7 @@ class SACTrainer:
                             if self.use_wandb:
                                 wandb.log(metrics, step=global_step)
                 
-                if global_step >= self.self_play_start and global_step % self.pool_update_freq == 0:
+                if global_step > 0 and global_step % self.pool_update_freq == 0:
                     self.opponent_pool.add_opponent(
                         self.agent,
                         global_step,
@@ -287,9 +296,12 @@ class SACTrainer:
             return self.random_opponent, "Random"
         
         if len(self.opponent_pool) == 0:
-            return self.random_opponent, "Random"
+            if step < self.initial_pool_steps:
+                return self.agent, "Self-Current"
+            else:
+                return self.random_opponent, "Random-Fallback"
         
-        if np.random.random() < self.random_prob_after_selfplay:
+        if self.random_prob_after_selfplay > 0 and np.random.random() < self.random_prob_after_selfplay:
             return self.random_opponent, "Random"
         else:
             return self.opponent_pool.sample_opponent(), "Self"
