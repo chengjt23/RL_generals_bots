@@ -89,7 +89,10 @@ class OfflineSACDataset(IterableDataset):
             return
         
         grid = self._create_initial_grid(replay, height, width)
-        game = Game(grid)
+        try:
+            game = Game(grid, ["player_0", "player_1"])
+        except Exception:
+            return
         
         memory_0 = MemoryAugmentation((height, width), history_length=7)
         memory_1 = MemoryAugmentation((height, width), history_length=7)
@@ -259,31 +262,32 @@ class OfflineSACDataset(IterableDataset):
             row = city_idx // width
             col = city_idx % width
             if 0 <= row < height and 0 <= col < width:
-                grid_array[row, col] = 'C'
+                city_value = min(max(army - 40, 0), 10)
+                if city_value == 10:
+                    grid_array[row, col] = 'x'
+                else:
+                    grid_array[row, col] = str(city_value)
         
         generals = replay['generals']
         if hasattr(generals, 'tolist'):
             generals = generals.tolist()
-        if len(generals) >= 2:
-            gen0_row, gen0_col = generals[0] // width, generals[0] % width
-            gen1_row, gen1_col = generals[1] // width, generals[1] % width
-            
-            if 0 <= gen0_row < height and 0 <= gen0_col < width:
-                grid_array[gen0_row, gen0_col] = 'A'
-            if 0 <= gen1_row < height and 0 <= gen1_col < width:
-                grid_array[gen1_row, gen1_col] = 'B'
+        for player_idx, general_idx in enumerate(generals):
+            row = general_idx // width
+            col = general_idx % width
+            if 0 <= row < height and 0 <= col < width:
+                grid_array[row, col] = chr(ord('A') + player_idx)
         
         grid_str = '\n'.join([''.join(row) for row in grid_array])
-        return Grid.from_string(grid_str)
+        return Grid(grid_str)
     
     def _get_direction(self, start_row: int, start_col: int, end_row: int, end_col: int) -> int:
         if end_row < start_row and end_col == start_col:
             return 0
-        elif end_col > start_col and end_row == start_row:
-            return 1
         elif end_row > start_row and end_col == start_col:
+            return 1
+        elif end_row == start_row and end_col < start_col:
             return 2
-        elif end_col < start_col and end_row == start_row:
+        elif end_row == start_row and end_col > start_col:
             return 3
         return -1
 
