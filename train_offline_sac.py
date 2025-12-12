@@ -88,6 +88,7 @@ class OfflineSACTrainer:
         total_epochs = self.config['training']['epochs']
         log_frequency = self.config['training']['log_frequency']
         save_frequency = self.config['training']['save_frequency']
+        steps_per_epoch = self.config['training'].get('steps_per_epoch', None)
         
         global_step = 0
         
@@ -99,6 +100,8 @@ class OfflineSACTrainer:
         print(f"BC pretrain: {self.config['experiment']['bc_pretrain_path']}")
         print(f"Total epochs: {total_epochs}")
         print(f"Batch size: {self.config['training']['batch_size']}")
+        if steps_per_epoch:
+            print(f"Steps per epoch: {steps_per_epoch}")
         print("="*60 + "\n")
         
         for epoch in range(total_epochs):
@@ -109,8 +112,10 @@ class OfflineSACTrainer:
                 'entropy': []
             }
             
-            pbar = tqdm(self.dataloader, desc=f"Epoch {epoch+1}/{total_epochs}")
+            pbar = tqdm(self.dataloader, desc=f"Epoch {epoch+1}/{total_epochs}", 
+                       total=steps_per_epoch if steps_per_epoch else None)
             
+            epoch_step = 0
             for batch_data in pbar:
                 obs, memory, actions, rewards, next_obs, next_memory, dones = batch_data
                 
@@ -131,6 +136,10 @@ class OfflineSACTrainer:
                         epoch_losses[key].append(metrics[key])
                 
                 global_step += 1
+                epoch_step += 1
+                
+                if steps_per_epoch and epoch_step >= steps_per_epoch:
+                    break
                 
                 if global_step % log_frequency == 0:
                     avg_critic_loss = np.mean(epoch_losses['critic_loss'][-100:])
