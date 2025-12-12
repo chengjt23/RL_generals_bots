@@ -118,10 +118,10 @@ class OfflineSACTrainer:
                     'observations': obs.to(self.device),
                     'memories': memory.to(self.device),
                     'actions': actions.to(self.device),
-                    'rewards': rewards.to(self.device),
+                    'rewards': rewards.to(self.device).float(),
                     'next_observations': next_obs.to(self.device),
                     'next_memories': next_memory.to(self.device),
-                    'dones': dones.to(self.device)
+                    'dones': dones.to(self.device).float()
                 }
                 
                 metrics = self.agent.update(batch)

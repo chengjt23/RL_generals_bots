@@ -210,7 +210,8 @@ class OfflineSACDataset(IterableDataset):
                     
                     prior_obs_1 = next_obs_1
                 
-                done = 0.0
+                done = np.float32(0.0)
+                reward = np.float32(reward)
                 
                 yield (obs_tensor, memory_features, action_array, reward, 
                        next_obs_tensor, next_memory_features, done)

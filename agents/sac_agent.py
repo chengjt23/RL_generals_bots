@@ -45,9 +45,9 @@ class SACAgent(Agent):
         self.critic_1_target.load_state_dict(self.critic_1.state_dict())
         self.critic_2_target.load_state_dict(self.critic_2.state_dict())
         
-        self.log_alpha = nn.Parameter(torch.tensor(np.log(alpha), device=self.device))
+        self.log_alpha = nn.Parameter(torch.tensor(np.log(alpha), dtype=torch.float32, device=self.device))
         action_space_size = 9 * grid_size * grid_size
-        self.target_entropy = -np.log(1.0 / action_space_size) * 0.98
+        self.target_entropy = float(-np.log(1.0 / action_space_size) * 0.98)
         
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(list(self.critic_1.parameters()) + list(self.critic_2.parameters()), lr=critic_lr)
@@ -186,7 +186,7 @@ class SACAgent(Agent):
             
             alpha = self.log_alpha.exp()
             next_q_value = (next_policy_probs * (min_q_next_flat - alpha * next_log_probs)).sum(dim=-1)
-            target_q = rewards + (1 - dones) * self.gamma * next_q_value
+            target_q = rewards + (1 - dones) * float(self.gamma) * next_q_value
         
         q1 = self.critic_1(obs, memory)
         q2 = self.critic_2(obs, memory)
@@ -231,7 +231,7 @@ class SACAgent(Agent):
         
         if self.auto_tune_alpha:
             entropy = -(policy_probs * log_probs).sum(dim=-1).mean()
-            alpha_loss = -(self.log_alpha * (entropy - self.target_entropy).detach())
+            alpha_loss = -(self.log_alpha * (entropy - torch.tensor(self.target_entropy, dtype=torch.float32, device=self.device)).detach())
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
