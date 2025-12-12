@@ -35,4 +35,12 @@ Epoch 3 Summary:
   Actor Loss: -13.1208
   Alpha: 0.0912
   Entropy: 3.7053
-Epoch 4/10:  65%|███████▊    | 1945/3000 [01:57<01:02, 16.94it/s, c_loss=0.139, a_loss=-15.558, alpha=0.065, entropy=3.92]
+Epoch 4/10: 100%|███████████▉| 2999/3000 [03:00<00:00, 16.66it/s, c_loss=0.198, a_loss=-15.871, alpha=0.059, entropy=4.04]
+
+Epoch 4 Summary:
+  Critic Loss: 0.2522
+  Actor Loss: -15.1317
+  Alpha: 0.0676
+  Entropy: 3.7572
+Saved checkpoint: experiments/offline_sac_20251212_170859/checkpoints/epoch_4.pt
+Epoch 5/10:  80%|█████████▋  | 2415/3000 [02:26<00:34, 16.82it/s, c_loss=0.180, a_loss=-16.451, alpha=0.046, entropy=3.81]

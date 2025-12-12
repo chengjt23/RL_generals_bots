@@ -21,3 +21,5 @@
 {"time":"2025-12-12T17:20:52.091023769+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":5835}
 {"time":"2025-12-12T17:20:52.190687648+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":1}
 {"time":"2025-12-12T17:22:55.592265643+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-offline-rl/144ahnu1/file_stream\": EOF"}
+{"time":"2025-12-12T17:25:55.595017525+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-offline-rl/144ahnu1/file_stream\": EOF"}
+{"time":"2025-12-12T17:26:55.591972543+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-offline-rl/144ahnu1/file_stream\": EOF"}
