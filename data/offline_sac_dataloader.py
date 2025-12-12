@@ -68,11 +68,22 @@ class OfflineSACDataset(IterableDataset):
                 yield from self._process_replay(replay)
     
     def _process_replay(self, replay: dict):
-        if replay.get('stars', 0) < self.min_stars:
+        stars = replay.get('stars', [0])
+        if hasattr(stars, '__iter__') and not isinstance(stars, str):
+            stars = max(stars) if len(stars) > 0 else 0
+        if stars < self.min_stars:
             return
         
         width = replay['mapWidth']
         height = replay['mapHeight']
+        if hasattr(width, '__iter__'):
+            width = int(width[0]) if len(width) > 0 else 0
+        else:
+            width = int(width)
+        if hasattr(height, '__iter__'):
+            height = int(height[0]) if len(height) > 0 else 0
+        else:
+            height = int(height)
         
         if width > self.grid_size or height > self.grid_size:
             return
@@ -84,7 +95,11 @@ class OfflineSACDataset(IterableDataset):
         memory_1 = MemoryAugmentation((height, width), history_length=7)
         
         afks = replay.get('afks', [])
+        if hasattr(afks, 'tolist'):
+            afks = afks.tolist()
         moves = replay.get('moves', [])
+        if hasattr(moves, 'tolist'):
+            moves = moves.tolist()
         
         if not moves:
             return
@@ -93,25 +108,24 @@ class OfflineSACDataset(IterableDataset):
         prior_obs_0 = None
         prior_obs_1 = None
         
-        for move_data in moves:
+        for move in moves:
             if turn >= self.max_turns:
                 break
             
-            turn = move_data['turn']
+            if len(move) < 4:
+                continue
             
-            if turn % 2 == 0:
-                player_idx = move_data.get('index', 0)
-            else:
-                player_idx = move_data.get('index', 1)
+            player_idx = move[0]
+            start_tile = move[1]
+            end_tile = move[2]
+            is_half = move[3]
             
             if player_idx in afks:
                 continue
             
-            start_tile = move_data.get('start')
-            end_tile = move_data.get('end')
-            is_half = move_data.get('is50', False)
+            turn += 1
             
-            if start_tile is None or end_tile is None:
+            if start_tile < 0 or end_tile < 0:
                 action_pass = np.array([1, 0, 0, 0, 0], dtype=np.int8)
                 actions = {"player_0": action_pass, "player_1": action_pass}
                 
@@ -226,19 +240,30 @@ class OfflineSACDataset(IterableDataset):
     def _create_initial_grid(self, replay: dict, height: int, width: int) -> Grid:
         grid_array = np.full((height, width), '.', dtype='U1')
         
-        for mountain_idx in replay['mountains']:
+        mountains = replay['mountains']
+        if hasattr(mountains, 'tolist'):
+            mountains = mountains.tolist()
+        for mountain_idx in mountains:
             row = mountain_idx // width
             col = mountain_idx % width
             if 0 <= row < height and 0 <= col < width:
                 grid_array[row, col] = '#'
         
-        for city_idx, army in zip(replay['cities'], replay['cityArmies']):
+        cities = replay['cities']
+        city_armies = replay['cityArmies']
+        if hasattr(cities, 'tolist'):
+            cities = cities.tolist()
+        if hasattr(city_armies, 'tolist'):
+            city_armies = city_armies.tolist()
+        for city_idx, army in zip(cities, city_armies):
             row = city_idx // width
             col = city_idx % width
             if 0 <= row < height and 0 <= col < width:
                 grid_array[row, col] = 'C'
         
         generals = replay['generals']
+        if hasattr(generals, 'tolist'):
+            generals = generals.tolist()
         if len(generals) >= 2:
             gen0_row, gen0_col = generals[0] // width, generals[0] % width
             gen1_row, gen1_col = generals[1] // width, generals[1] % width
