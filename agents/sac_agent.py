@@ -191,19 +191,19 @@ class SACAgent(Agent):
         q1 = self.critic_1(obs, memory)
         q2 = self.critic_2(obs, memory)
         
-        is_pass = actions[:, 0]
-        rows = torch.clamp(actions[:, 1], 0, h - 1)
-        cols = torch.clamp(actions[:, 2], 0, w - 1)
-        directions = actions[:, 3]
-        splits = actions[:, 4]
+        is_pass = actions[:, 0].long()
+        rows = torch.clamp(actions[:, 1], 0, h - 1).long()
+        cols = torch.clamp(actions[:, 2], 0, w - 1).long()
+        directions = actions[:, 3].long()
+        splits = actions[:, 4].long()
         
         action_channel = torch.where(
             is_pass == 1,
             torch.zeros_like(is_pass),
             1 + directions * 2 + splits
-        )
+        ).long()
         
-        batch_indices = torch.arange(batch_size, device=obs.device)
+        batch_indices = torch.arange(batch_size, device=obs.device, dtype=torch.long)
         q1_pred = q1[batch_indices, action_channel, rows, cols]
         q2_pred = q2[batch_indices, action_channel, rows, cols]
         
