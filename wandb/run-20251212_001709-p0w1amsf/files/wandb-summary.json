@@ -1,0 +1,1 @@
+{"critic_loss":0.00039046924212016165,"episode":50,"alpha":0.002393626026274498,"_runtime":1263.570346238,"episode_length":500,"_timestamp":1.7654710886698158e+09,"actor_loss":-1.536580204963684,"avg_reward_10":0.8743457996948397,"_step":27000,"episode_reward":0.8083832095993797,"entropy":0.3364669680595398,"_wandb":{"runtime":1263}}

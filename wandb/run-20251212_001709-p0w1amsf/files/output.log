@@ -1,0 +1,21 @@
+[34m[1mwandb[0m: Detected [agents] in use.
+[34m[1mwandb[0m: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+[34m[1mwandb[0m: For more information, check out the docs at: https://weave-docs.wandb.ai/
+Training:   3%|▊                              | 27103/1000000 [21:03<18:43:57, 14.43it/s, avg_reward=0.87, avg_length=500]Traceback (most recent call last):
+  File "/root/RL_generals_bots/train_sac.py", line 225, in <module>
+    main()
+  File "/root/RL_generals_bots/train_sac.py", line 221, in main
+    trainer.train()
+  File "/root/RL_generals_bots/train_sac.py", line 170, in train
+    metrics = self.agent.update(batch)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/RL_generals_bots/agents/sac_agent.py", line 218, in update
+    actor_loss.backward()
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/torch/_tensor.py", line 625, in backward
+    torch.autograd.backward(
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/torch/autograd/__init__.py", line 354, in backward
+    _engine_run_backward(
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/torch/autograd/graph.py", line 841, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

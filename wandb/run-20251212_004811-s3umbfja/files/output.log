@@ -1,0 +1,21 @@
+[34m[1mwandb[0m: Detected [agents] in use.
+[34m[1mwandb[0m: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+[34m[1mwandb[0m: For more information, check out the docs at: https://weave-docs.wandb.ai/
+Training:   1%|     | 11247/1000000 [02:20<19:39:28, 13.97it/s, avg_reward=-0.07, avg_length=500, pool_size=0, opp=Random]Traceback (most recent call last):
+
+Training Plan:
+  0-100000: vs RandomAgent
+  100000+: vs Self-play (Opponent Pool)
+  Pool update frequency: every 10000 steps
+  Random opponent probability after self-play: 20.0%
+  File "/root/RL_generals_bots/train_sac.py", line 322, in <module>
+    main()
+  File "/root/RL_generals_bots/train_sac.py", line 318, in main
+    trainer.train()
+  File "/root/RL_generals_bots/train_sac.py", line 233, in train
+    metrics = self.agent.update(batch)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/RL_generals_bots/agents/sac_agent.py", line 233, in update
+    'critic_loss': critic_loss.item(),
+                   ^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

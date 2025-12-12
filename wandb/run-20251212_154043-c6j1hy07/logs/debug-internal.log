@@ -1,0 +1,189 @@
+{"time":"2025-12-12T15:40:44.182508154+08:00","level":"INFO","msg":"stream: starting","core version":"0.23.0"}
+{"time":"2025-12-12T15:40:44.758292259+08:00","level":"INFO","msg":"stream: created new stream","id":"c6j1hy07"}
+{"time":"2025-12-12T15:40:44.75837615+08:00","level":"INFO","msg":"handler: started","stream_id":"c6j1hy07"}
+{"time":"2025-12-12T15:40:44.758531588+08:00","level":"INFO","msg":"stream: started","id":"c6j1hy07"}
+{"time":"2025-12-12T15:40:44.758550038+08:00","level":"INFO","msg":"sender: started","stream_id":"c6j1hy07"}
+{"time":"2025-12-12T15:40:44.758554122+08:00","level":"INFO","msg":"writer: started","stream_id":"c6j1hy07"}
+{"time":"2025-12-12T15:41:50.921402203+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:48:05.921829709+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:48:35.921638381+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:48:50.922517624+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:49:05.92191521+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:49:35.926503549+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:50:20.922296744+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:50:28.379363037+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:55:20.923016385+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:55:50.923822683+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:56:05.921398212+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:56:44.318320109+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:56:57.069592467+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:57:11.351375619+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T15:59:24.158375179+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:00:39.160728831+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:02:24.16190965+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:03:09.160078147+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:03:24.159866498+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:05:54.159463174+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:06:39.161489523+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:06:54.163572288+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:08:09.158408908+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:16:54.157304907+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:20:09.159609945+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:26:09.156805745+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:30:49.886415048+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":23907}
+{"time":"2025-12-12T16:30:51.498973099+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":13}
+{"time":"2025-12-12T16:31:04.75801271+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":24024}
+{"time":"2025-12-12T16:31:07.847075635+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":24}
+{"time":"2025-12-12T16:31:19.74683434+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":24142}
+{"time":"2025-12-12T16:31:22.532942449+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":22}
+{"time":"2025-12-12T16:31:34.740264926+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":24263}
+{"time":"2025-12-12T16:31:36.294884521+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":13}
+{"time":"2025-12-12T16:31:49.757466604+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":24381}
+{"time":"2025-12-12T16:31:53.130529112+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":27}
+{"time":"2025-12-12T16:32:04.883372784+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":24500}
+{"time":"2025-12-12T16:32:06.772058926+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":15}
+{"time":"2025-12-12T16:32:19.817189231+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":24619}
+{"time":"2025-12-12T16:32:23.297697525+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":28}
+{"time":"2025-12-12T16:32:34.454205024+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":24738}
+{"time":"2025-12-12T16:32:38.50250734+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":32}
+{"time":"2025-12-12T16:32:49.736535465+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":24859}
+{"time":"2025-12-12T16:32:50.787361491+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":9}
+{"time":"2025-12-12T16:33:04.738105134+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":24978}
+{"time":"2025-12-12T16:33:05.764868165+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":9}
+{"time":"2025-12-12T16:33:19.72608159+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":25097}
+{"time":"2025-12-12T16:33:22.329399264+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":21}
+{"time":"2025-12-12T16:33:34.721538417+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":25216}
+{"time":"2025-12-12T16:33:35.311520131+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":5}
+{"time":"2025-12-12T16:33:49.74631239+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":25338}
+{"time":"2025-12-12T16:33:51.391325558+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":13}
+{"time":"2025-12-12T16:33:54.161647597+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:34:04.826263046+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":25457}
+{"time":"2025-12-12T16:34:07.181220914+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":19}
+{"time":"2025-12-12T16:34:19.817365306+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":25574}
+{"time":"2025-12-12T16:34:22.346656264+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":20}
+{"time":"2025-12-12T16:34:34.83876411+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":25692}
+{"time":"2025-12-12T16:34:36.441149032+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":13}
+{"time":"2025-12-12T16:34:49.806388121+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":25813}
+{"time":"2025-12-12T16:34:50.732868982+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":8}
+{"time":"2025-12-12T16:35:04.84560473+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":25931}
+{"time":"2025-12-12T16:35:08.572949745+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":29}
+{"time":"2025-12-12T16:35:09.158376835+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:35:16.581980541+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:35:19.802587675+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":26048}
+{"time":"2025-12-12T16:35:22.502566551+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":21}
+{"time":"2025-12-12T16:35:34.765508277+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":26165}
+{"time":"2025-12-12T16:35:35.598976818+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":7}
+{"time":"2025-12-12T16:35:49.16322474+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":26283}
+{"time":"2025-12-12T16:35:50.611928648+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":12}
+{"time":"2025-12-12T16:35:54.159762147+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:36:04.740466091+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":26407}
+{"time":"2025-12-12T16:36:07.890497534+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":25}
+{"time":"2025-12-12T16:36:19.803490621+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":26526}
+{"time":"2025-12-12T16:36:21.607843414+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":14}
+{"time":"2025-12-12T16:36:34.83322168+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":26644}
+{"time":"2025-12-12T16:36:38.06333822+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":24}
+{"time":"2025-12-12T16:36:49.94327234+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":26760}
+{"time":"2025-12-12T16:36:53.170177773+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":28}
+{"time":"2025-12-12T16:37:04.867194397+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":26879}
+{"time":"2025-12-12T16:37:08.952327697+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":32}
+{"time":"2025-12-12T16:37:19.886586745+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":26997}
+{"time":"2025-12-12T16:37:20.961199962+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":9}
+{"time":"2025-12-12T16:37:34.788583514+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":27114}
+{"time":"2025-12-12T16:37:35.956111188+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":10}
+{"time":"2025-12-12T16:37:49.803634494+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":27232}
+{"time":"2025-12-12T16:37:53.600251482+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":30}
+{"time":"2025-12-12T16:38:04.861755729+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":27353}
+{"time":"2025-12-12T16:38:07.192342984+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":19}
+{"time":"2025-12-12T16:38:19.866800831+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":27471}
+{"time":"2025-12-12T16:38:22.715570046+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":22}
+{"time":"2025-12-12T16:38:34.7913505+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":27588}
+{"time":"2025-12-12T16:38:37.924632601+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":25}
+{"time":"2025-12-12T16:38:39.158991497+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:38:49.865080522+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":27706}
+{"time":"2025-12-12T16:38:54.159845131+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:38:55.433248+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":44}
+{"time":"2025-12-12T16:39:04.339273024+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":27823}
+{"time":"2025-12-12T16:39:09.430243525+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":40}
+{"time":"2025-12-12T16:39:19.81217818+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":27945}
+{"time":"2025-12-12T16:39:21.981894235+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":17}
+{"time":"2025-12-12T16:39:34.807681304+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":28064}
+{"time":"2025-12-12T16:39:36.886952224+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":17}
+{"time":"2025-12-12T16:39:39.166926626+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:39:49.73351356+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":28182}
+{"time":"2025-12-12T16:39:50.931478933+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":10}
+{"time":"2025-12-12T16:40:04.886741241+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":28300}
+{"time":"2025-12-12T16:40:09.200388281+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:40:15.21982113+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":79}
+{"time":"2025-12-12T16:40:20.028188504+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":28416}
+{"time":"2025-12-12T16:40:29.932124744+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":74}
+{"time":"2025-12-12T16:40:34.929589803+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":28529}
+{"time":"2025-12-12T16:40:42.279988722+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":55}
+{"time":"2025-12-12T16:40:49.968585046+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":28643}
+{"time":"2025-12-12T16:41:14.397689013+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":185}
+{"time":"2025-12-12T16:41:19.945810152+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":28871}
+{"time":"2025-12-12T16:41:26.921353634+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":52}
+{"time":"2025-12-12T16:41:49.413278493+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:44:34.409830676+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:44:41.591458827+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:44:50.002357499+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":30473}
+{"time":"2025-12-12T16:44:50.920985406+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:44:52.6773051+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":20}
+{"time":"2025-12-12T16:45:06.364267449+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:45:13.603832939+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:45:23.34127271+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:45:38.739495534+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:46:53.825232455+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:47:08.825281455+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:47:38.82759171+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:47:45.496370681+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": Service Unavailable"}
+{"time":"2025-12-12T16:47:47.847736285+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": Service Unavailable"}
+{"time":"2025-12-12T16:47:48.826257239+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": Service Unavailable"}
+{"time":"2025-12-12T16:47:50.024355594+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":31844}
+{"time":"2025-12-12T16:47:53.023124488+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":23}
+{"time":"2025-12-12T16:50:08.824959893+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:50:20.015686907+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":32987}
+{"time":"2025-12-12T16:50:23.169903375+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":24}
+{"time":"2025-12-12T16:50:23.831127918+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:50:31.304592309+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:50:41.110570978+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:51:15.496837108+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": Service Unavailable"}
+{"time":"2025-12-12T16:51:26.373264734+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:52:11.373622816+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:52:49.911817627+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":34122}
+{"time":"2025-12-12T16:52:52.613650174+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":21}
+{"time":"2025-12-12T16:52:56.372334661+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:53:03.446301757+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:53:05.008506575+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":34237}
+{"time":"2025-12-12T16:53:10.750755412+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":44}
+{"time":"2025-12-12T16:53:13.502980361+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:53:26.374096925+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:53:41.374598316+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:53:56.374106236+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:54:26.37245315+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:54:33.642434375+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:54:44.153400464+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:56:26.373717092+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:56:41.374563489+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:56:48.829551683+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:56:59.07780514+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:57:11.37484148+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T16:57:41.375359537+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:00:26.373142565+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:00:56.383712765+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:01:26.376288197+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:02:26.372548035+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:03:26.37327491+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:03:33.524895098+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:03:56.374178087+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:04:18.242890549+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": unexpected EOF"}
+{"time":"2025-12-12T17:04:25.577868839+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:04:35.196019359+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:04:49.170472137+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": unexpected EOF"}
+{"time":"2025-12-12T17:04:49.171797942+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:04:49.785734846+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":39648}
+{"time":"2025-12-12T17:04:51.336984297+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": Service Unavailable"}
+{"time":"2025-12-12T17:04:51.556033673+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": Service Unavailable"}
+{"time":"2025-12-12T17:04:56.666189428+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":54}
+{"time":"2025-12-12T17:13:16.680235726+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:15:46.67899659+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-rl/c6j1hy07/file_stream\": EOF"}
+{"time":"2025-12-12T17:17:53.940057791+08:00","level":"INFO","msg":"stream: closing","id":"c6j1hy07"}

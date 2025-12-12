@@ -1,0 +1,72 @@
+_wandb:
+    value:
+        cli_version: 0.23.0
+        e:
+            fmycqimsan8ev8ddw3hyhhbbw1bwsmux:
+                args:
+                    - --config
+                    - configs/config_offline_sac.yaml
+                codePath: train_offline_sac.py
+                codePathLocal: train_offline_sac.py
+                executable: /root/miniconda3/envs/rl/bin/python
+                git:
+                    commit: 829bca1c8a8d94e21ee91781bf49588bf492a272
+                    remote: https://github.com/chengjt23/RL_generals_bots.git
+                host: p-acf455511d83-ackcs-00gjftw7
+                os: Linux-5.15.0-119-generic-x86_64-with-glibc2.39
+                program: /root/RL_generals_bots/train_offline_sac.py
+                python: CPython 3.11.14
+                root: /root/RL_generals_bots
+                startedAt: "2025-12-12T07:59:54.005456Z"
+                writerId: fmycqimsan8ev8ddw3hyhhbbw1bwsmux
+        m: []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 1
+            "2":
+                - 1
+            "3":
+                - 13
+                - 16
+            "4": 3.11.14
+            "5": 0.23.0
+            "12": 0.23.0
+            "13": linux-x86_64
+data:
+    value:
+        data_dir: data/generals_io_replays
+        max_replays: null
+        min_stars: 70
+        num_workers: 4
+experiment:
+    value:
+        bc_pretrain_path: ./experiments/epoch_12_loss_1.6968.pt
+        name: offline_sac
+        save_dir: experiments
+logging:
+    value:
+        project_name: generals-offline-rl
+        use_wandb: true
+        wandb_entity: null
+model:
+    value:
+        base_channels: 64
+        grid_size: 24
+        memory_channels: 18
+        obs_channels: 15
+training:
+    value:
+        actor_lr: 0.0001
+        alpha: 0.2
+        alpha_lr: 0.0001
+        auto_tune_alpha: true
+        batch_size: 128
+        critic_lr: 0.0001
+        device: cuda
+        epochs: 10
+        gamma: 0.99
+        log_frequency: 100
+        save_frequency: 2
+        seed: 42
+        tau: 0.005

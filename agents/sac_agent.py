@@ -17,6 +17,7 @@ class SACAgent(Agent):
         grid_size: int = 24,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         bc_model_path: str | None = None,
+        model_path: str | None = None,
         memory_channels: int = 18,
         gamma: float = 0.99,
         tau: float = 0.005,
@@ -39,13 +40,17 @@ class SACAgent(Agent):
         self.critic_1_target = SACCritic(obs_channels=15, memory_channels=memory_channels, grid_size=grid_size, base_channels=64).to(self.device)
         self.critic_2_target = SACCritic(obs_channels=15, memory_channels=memory_channels, grid_size=grid_size, base_channels=64).to(self.device)
         
+        self.log_alpha = nn.Parameter(torch.tensor(np.log(alpha), dtype=torch.float32, device=self.device))
+
         if bc_model_path is not None:
             self.load_bc_weights(bc_model_path)
+            
+        if model_path is not None:
+            self.load(model_path)
         
         self.critic_1_target.load_state_dict(self.critic_1.state_dict())
         self.critic_2_target.load_state_dict(self.critic_2.state_dict())
         
-        self.log_alpha = nn.Parameter(torch.tensor(np.log(alpha), dtype=torch.float32, device=self.device))
         action_space_size = 9 * grid_size * grid_size
         self.target_entropy = float(-np.log(1.0 / action_space_size) * 0.98)
         
@@ -71,6 +76,18 @@ class SACAgent(Agent):
         self.critic_1.load_state_dict(critic_state_dict, strict=False)
         self.critic_2.load_state_dict(critic_state_dict, strict=False)
     
+    def load(self, model_path):
+        ckpt = torch.load(model_path, map_location=self.device)
+        if 'actor_state_dict' in ckpt:
+            self.actor.load_state_dict(ckpt['actor_state_dict'])
+        if 'critic_1_state_dict' in ckpt:
+            self.critic_1.load_state_dict(ckpt['critic_1_state_dict'])
+        if 'critic_2_state_dict' in ckpt:
+            self.critic_2.load_state_dict(ckpt['critic_2_state_dict'])
+        if 'log_alpha' in ckpt:
+             with torch.no_grad():
+                self.log_alpha.copy_(ckpt['log_alpha'])
+
     def reset(self):
         self.memory.reset()
         self.last_action = None

@@ -1,0 +1,1 @@
+{"opponent_pool_size":1,"entropy":0.02537885680794716,"avg_reward_10":0.8849153803674976,"_timestamp":1.7654783682554722e+09,"episode":200,"actor_loss":-1.0374062061309814,"_wandb":{"runtime":6501},"critic_loss":0.021648921072483063,"episode_length":500,"opponent_type":0,"_step":100000,"episode_reward":0.9889087600511965,"alpha":3.1681571742000405e-13,"_runtime":6501.855519858}

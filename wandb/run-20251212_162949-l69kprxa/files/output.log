@@ -1,0 +1,26 @@
+[34m[1mwandb[0m: Detected [agents] in use.
+[34m[1mwandb[0m: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+[34m[1mwandb[0m: For more information, check out the docs at: https://weave-docs.wandb.ai/
+
+============================================================
+Offline SAC Training
+============================================================
+Training mode: Offline (using replay data)
+Data source: data/generals_io_replays
+BC pretrain: ./experiments/epoch_12_loss_1.6968.pt
+Total epochs: 10
+Batch size: 128
+============================================================
+Epoch 1/10: 0it [00:01, ?it/s]
+Traceback (most recent call last):
+  File "/root/RL_generals_bots/train_offline_sac.py", line 204, in <module>
+    main()
+  File "/root/RL_generals_bots/train_offline_sac.py", line 200, in main
+    trainer.train()
+  File "/root/RL_generals_bots/train_offline_sac.py", line 127, in train
+    metrics = self.agent.update(batch)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/RL_generals_bots/agents/sac_agent.py", line 207, in update
+    q1_pred = q1[batch_indices, action_channel, rows, cols]
+              ~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+IndexError: tensors used as indices must be long, int, byte or bool tensors

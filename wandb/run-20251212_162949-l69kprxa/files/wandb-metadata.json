@@ -1,0 +1,44 @@
+{
+  "os": "Linux-5.15.0-119-generic-x86_64-with-glibc2.39",
+  "python": "CPython 3.11.14",
+  "startedAt": "2025-12-12T08:29:49.410311Z",
+  "args": [
+    "--config",
+    "configs/config_offline_sac.yaml"
+  ],
+  "program": "/root/RL_generals_bots/train_offline_sac.py",
+  "codePath": "train_offline_sac.py",
+  "codePathLocal": "train_offline_sac.py",
+  "git": {
+    "remote": "https://github.com/chengjt23/RL_generals_bots.git",
+    "commit": "cb4cb3d86eefe77c2ef7641de4eb2a6bc1267a48"
+  },
+  "email": "chengyon23@mails.tsinghua.edu.cn",
+  "root": "/root/RL_generals_bots",
+  "host": "p-acf455511d83-ackcs-00gjftw7",
+  "executable": "/root/miniconda3/envs/rl/bin/python",
+  "cpu_count": 64,
+  "cpu_count_logical": 128,
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "32212254720",
+      "used": "24112721920"
+    }
+  },
+  "memory": {
+    "total": "1081819086848"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 4090",
+      "memoryTotal": "25757220864",
+      "cudaCores": 16384,
+      "architecture": "Ada",
+      "uuid": "GPU-63c94b1b-0227-3332-779c-90bc491f56aa"
+    }
+  ],
+  "cudaVersion": "12.4",
+  "writerId": "v7vjo33xlwx5hd5r6vdh86iqyo7s2pxs"
+}

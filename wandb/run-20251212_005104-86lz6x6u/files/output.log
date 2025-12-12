@@ -1,0 +1,25 @@
+[34m[1mwandb[0m: Detected [agents] in use.
+[34m[1mwandb[0m: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+[34m[1mwandb[0m: For more information, check out the docs at: https://weave-docs.wandb.ai/
+Training:  10%|▎  | 100000/1000000 [1:48:21<17:28:49, 14.30it/s, avg_reward=0.88, avg_length=500, pool_size=1, opp=Random]Traceback (most recent call last):
+
+Training Plan:
+  0-100000: vs RandomAgent
+  100000+: vs Self-play (Opponent Pool)
+  Pool update frequency: every 10000 steps
+  Random opponent probability after self-play: 20.0%
+
+[Opponent Pool] Added agent from step 100000. Pool size: 1
+  File "/root/RL_generals_bots/train_sac.py", line 322, in <module>
+    main()
+  File "/root/RL_generals_bots/train_sac.py", line 318, in main
+    trainer.train()
+  File "/root/RL_generals_bots/train_sac.py", line 203, in train
+    opponent_action = current_opponent.act(obs_dict["Opponent"], deterministic=True)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/RL_generals_bots/agents/sac_agent.py", line 81, in act
+    self.memory.update(self._obs_to_dict(observation), self.last_action, self.opponent_last_action)
+  File "/root/RL_generals_bots/agents/memory.py", line 23, in update
+    self.discovered_castles = np.maximum(self.discovered_castles, castles_mask * visible_mask)
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: operands could not be broadcast together with shapes (24,24) (18,23)

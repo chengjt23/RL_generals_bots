@@ -1,0 +1,55 @@
+[34m[1mwandb[0m: Detected [agents] in use.
+[34m[1mwandb[0m: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+[34m[1mwandb[0m: For more information, check out the docs at: https://weave-docs.wandb.ai/
+
+============================================================
+Offline SAC Training
+============================================================
+Training mode: Offline (using replay data)
+Data source: data/generals_io_replays
+BC pretrain: ./experiments/epoch_12_loss_1.6968.pt
+Total epochs: 10
+Batch size: 128
+============================================================
+Epoch 1/10: 0it [00:00, ?it/s]
+Traceback (most recent call last):
+  File "/root/RL_generals_bots/train_offline_sac.py", line 204, in <module>
+    main()
+  File "/root/RL_generals_bots/train_offline_sac.py", line 200, in main
+    trainer.train()
+  File "/root/RL_generals_bots/train_offline_sac.py", line 114, in train
+    for batch_data in pbar:
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/tqdm/std.py", line 1181, in __iter__
+    for obj in iterable:
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 732, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 1506, in _next_data
+    return self._process_data(data, worker_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 1541, in _process_data
+    data.reraise()
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/torch/_utils.py", line 769, in reraise
+    raise exception
+ModuleNotFoundError: Caught ModuleNotFoundError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/torch/utils/data/_utils/worker.py", line 349, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/torch/utils/data/_utils/fetch.py", line 33, in fetch
+    data.append(next(self.dataset_iter))
+                ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/RL_generals_bots/data/offline_sac_dataloader.py", line 61, in __iter__
+    df_chunk = table.to_pandas()
+               ^^^^^^^^^^^^^^^^^
+  File "pyarrow/array.pxi", line 1032, in pyarrow.lib._PandasConvertible.to_pandas
+  File "pyarrow/table.pxi", line 5177, in pyarrow.lib.Table._to_pandas
+  File "/root/miniconda3/envs/rl/lib/python3.11/site-packages/pyarrow/pandas_compat.py", line 802, in table_to_dataframe
+    index = _pandas_api.pd.RangeIndex(table.num_rows)
+            ^^^^^^^^^^^^^^
+  File "pyarrow/pandas-shim.pxi", line 142, in pyarrow.lib._PandasAPIShim.pd.__get__
+  File "pyarrow/pandas-shim.pxi", line 107, in pyarrow.lib._PandasAPIShim._check_import
+  File "pyarrow/pandas-shim.pxi", line 110, in pyarrow.lib._PandasAPIShim._check_import
+  File "pyarrow/pandas-shim.pxi", line 55, in pyarrow.lib._PandasAPIShim._import_pandas
+  File "pyarrow/pandas-shim.pxi", line 50, in pyarrow.lib._PandasAPIShim._import_pandas
+ModuleNotFoundError: No module named 'pandas'

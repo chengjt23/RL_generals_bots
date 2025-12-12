@@ -1,0 +1,1 @@
+{"alpha":3.849105292606929e-11,"_wandb":{"runtime":5828},"opponent_pool_size":8,"opponent_type":1,"_step":84000,"episode_reward":0,"avg_reward_10":0,"_timestamp":1.7655310418217385e+09,"entropy":8.210708588723969e-13,"critic_loss":4.318539595260518e-06,"actor_loss":-0.042335301637649536,"episode_length":500,"_runtime":5828.585666104,"episode":160}

@@ -1,0 +1,21 @@
+{
+  "os": "Linux-5.15.0-119-generic-x86_64-with-glibc2.39",
+  "python": "CPython 3.11.14",
+  "startedAt": "2025-12-11T16:01:03.261344Z",
+  "args": [
+    "--config",
+    "configs/config_sac.yaml"
+  ],
+  "program": "/root/RL_generals_bots/train_sac.py",
+  "codePath": "train_sac.py",
+  "codePathLocal": "train_sac.py",
+  "git": {
+    "remote": "https://github.com/chengjt23/RL_generals_bots.git",
+    "commit": "fa2a4fbf259d528b34797da2ed70661b5b24fe38"
+  },
+  "email": "chengyon23@mails.tsinghua.edu.cn",
+  "root": "/root/RL_generals_bots",
+  "host": "p-acf455511d83-ackcs-00gjftw7",
+  "executable": "/root/miniconda3/envs/rl/bin/python",
+  "writerId": "vk54evqwv8viiw5uly0ishm22k7r02cr"
+}

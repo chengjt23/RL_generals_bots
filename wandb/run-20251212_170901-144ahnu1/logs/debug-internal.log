@@ -1,0 +1,23 @@
+{"time":"2025-12-12T17:09:02.125295903+08:00","level":"INFO","msg":"stream: starting","core version":"0.23.0"}
+{"time":"2025-12-12T17:09:02.911576103+08:00","level":"INFO","msg":"stream: created new stream","id":"144ahnu1"}
+{"time":"2025-12-12T17:09:02.911658938+08:00","level":"INFO","msg":"handler: started","stream_id":"144ahnu1"}
+{"time":"2025-12-12T17:09:02.911829958+08:00","level":"INFO","msg":"stream: started","id":"144ahnu1"}
+{"time":"2025-12-12T17:09:02.911847695+08:00","level":"INFO","msg":"writer: started","stream_id":"144ahnu1"}
+{"time":"2025-12-12T17:09:02.911846624+08:00","level":"INFO","msg":"sender: started","stream_id":"144ahnu1"}
+{"time":"2025-12-12T17:13:08.816024779+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-offline-rl/144ahnu1/file_stream\": EOF"}
+{"time":"2025-12-12T17:14:33.761106565+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-offline-rl/144ahnu1/file_stream\": unexpected EOF"}
+{"time":"2025-12-12T17:15:55.592895537+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-offline-rl/144ahnu1/file_stream\": EOF"}
+{"time":"2025-12-12T17:16:55.592283157+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-offline-rl/144ahnu1/file_stream\": EOF"}
+{"time":"2025-12-12T17:19:37.542930294+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":5153}
+{"time":"2025-12-12T17:19:40.655128947+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":30}
+{"time":"2025-12-12T17:19:52.073871057+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":5288}
+{"time":"2025-12-12T17:19:53.509919999+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":12}
+{"time":"2025-12-12T17:20:07.605389765+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":5426}
+{"time":"2025-12-12T17:20:08.347294272+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":7}
+{"time":"2025-12-12T17:20:22.053094508+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":5559}
+{"time":"2025-12-12T17:20:26.047211364+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":34}
+{"time":"2025-12-12T17:20:37.47765934+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":5699}
+{"time":"2025-12-12T17:20:37.72595387+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":3}
+{"time":"2025-12-12T17:20:52.091023769+08:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":5835}
+{"time":"2025-12-12T17:20:52.190687648+08:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":1}
+{"time":"2025-12-12T17:22:55.592265643+08:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/chengyon23-/generals-offline-rl/144ahnu1/file_stream\": EOF"}

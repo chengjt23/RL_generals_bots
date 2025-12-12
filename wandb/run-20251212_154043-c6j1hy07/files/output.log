@@ -1,0 +1,30 @@
+[34m[1mwandb[0m: Detected [agents] in use.
+[34m[1mwandb[0m: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+[34m[1mwandb[0m: For more information, check out the docs at: https://weave-docs.wandb.ai/
+Training:   8%|▌     | 84237/1000000 [1:37:08<33:38:45,  7.56it/s, avg_reward=0.00, avg_length=500, pool_size=8, opp=Self]Traceback (most recent call last):
+
+Training Plan:
+  Pure Self-play from start
+  0-10000: Build initial pool
+  Pool update frequency: every 10000 steps
+  Pure self-play (no random opponent)
+
+[Opponent Pool] Added agent from step 10000. Pool size: 1
+[Opponent Pool] Added agent from step 20000. Pool size: 2
+[Opponent Pool] Added agent from step 30000. Pool size: 3
+[Opponent Pool] Added agent from step 40000. Pool size: 4
+[Opponent Pool] Added agent from step 50000. Pool size: 5
+[Opponent Pool] Added agent from step 60000. Pool size: 6
+[Opponent Pool] Added agent from step 70000. Pool size: 7
+[Opponent Pool] Added agent from step 80000. Pool size: 8
+  File "/root/RL_generals_bots/train_sac.py", line 334, in <module>
+    main()
+  File "/root/RL_generals_bots/train_sac.py", line 330, in main
+    trainer.train()
+  File "/root/RL_generals_bots/train_sac.py", line 223, in train
+    next_obs_tensor = self.agent._prepare_observation(next_obs_dict["SAC"]).squeeze(0).cpu().numpy()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/RL_generals_bots/agents/sac_agent.py", line 107, in _prepare_observation
+    return action
+                 ^
+KeyboardInterrupt

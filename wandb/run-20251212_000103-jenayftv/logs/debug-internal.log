@@ -1,0 +1,11 @@
+{"time":"2025-12-12T00:01:03.519785863+08:00","level":"INFO","msg":"stream: starting","core version":"0.23.0"}
+{"time":"2025-12-12T00:01:04.992416691+08:00","level":"INFO","msg":"stream: created new stream","id":"jenayftv"}
+{"time":"2025-12-12T00:01:04.992498522+08:00","level":"INFO","msg":"handler: started","stream_id":"jenayftv"}
+{"time":"2025-12-12T00:01:04.99265198+08:00","level":"INFO","msg":"stream: started","id":"jenayftv"}
+{"time":"2025-12-12T00:01:04.992670435+08:00","level":"INFO","msg":"sender: started","stream_id":"jenayftv"}
+{"time":"2025-12-12T00:01:04.992674096+08:00","level":"INFO","msg":"writer: started","stream_id":"jenayftv"}
+{"time":"2025-12-12T00:01:06.075532999+08:00","level":"INFO","msg":"stream: closing","id":"jenayftv"}
+{"time":"2025-12-12T00:01:07.887556831+08:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-12-12T00:01:09.32221102+08:00","level":"INFO","msg":"handler: closed","stream_id":"jenayftv"}
+{"time":"2025-12-12T00:01:09.322387758+08:00","level":"INFO","msg":"sender: closed","stream_id":"jenayftv"}
+{"time":"2025-12-12T00:01:09.322421204+08:00","level":"INFO","msg":"stream: closed","id":"jenayftv"}
