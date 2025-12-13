@@ -91,11 +91,19 @@ class BehaviorCloningTrainer:
                 print("Wandb disabled in config")
     
     def setup_data(self):
+        # print data configs
+        print("Data configuration:")
+        print(yaml.dump(self.config['data']))
+
         data_config = self.config['data']
         train_config = self.config['training']
         
         train_replays = int(data_config['max_replays'] * data_config['train_split'])
         val_replays = data_config['max_replays'] - train_replays
+
+        # print train and val replays
+        print(f"Train replays (streaming): {train_replays}")
+        print(f"Validation replays: {val_replays}")
         
         self.train_loader = create_iterable_dataloader(
             data_dir=data_config['data_dir'],
@@ -320,6 +328,7 @@ class BehaviorCloningTrainer:
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
             wandb.log({
                 'val/loss': final_avg_loss,
+                'val/step': self.global_step,
             }, step=self.global_step)
         
         return final_avg_loss
@@ -381,6 +390,9 @@ class BehaviorCloningTrainer:
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
                 wandb.log({
                     'epoch': epoch,
+                    'epoch/train_loss': train_loss,
+                    'epoch/val_loss': val_loss,
+                    'epoch/learning_rate': self.scheduler.get_last_lr()[0],
                 }, step=self.global_step)
             
             self.save_checkpoint(epoch, val_loss)
@@ -418,7 +430,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='RL/configs/behavior_cloning.yaml',
+        default='/root/oyx_fork/configs/config_base.yaml',
         help='Path to config file'
     )
     args = parser.parse_args()
