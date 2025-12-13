@@ -108,8 +108,6 @@ class OfflineSACDataset(IterableDataset):
             return
         
         turn = 0
-        prior_obs_0 = None
-        prior_obs_1 = None
         
         for move in moves:
             if turn >= self.max_turns:
@@ -160,11 +158,13 @@ class OfflineSACDataset(IterableDataset):
                 memory_features = memory_0.get_memory_features().astype(np.float32, copy=True)
                 memory_features = self._pad_memory(memory_features, self.grid_size)
                 action_array = action.copy()
+                current_obs = obs_0
             else:
                 obs_tensor = obs_1.as_tensor().astype(np.float32, copy=True)
                 memory_features = memory_1.get_memory_features().astype(np.float32, copy=True)
                 memory_features = self._pad_memory(memory_features, self.grid_size)
                 action_array = action.copy()
+                current_obs = obs_1
             
             actions = {
                 "player_0": action if player_idx == 0 else action_pass,
@@ -191,30 +191,35 @@ class OfflineSACDataset(IterableDataset):
                     next_obs_tensor = next_obs_0.as_tensor().astype(np.float32, copy=True)
                     next_memory_features = memory_0.get_memory_features().astype(np.float32, copy=True)
                     next_memory_features = self._pad_memory(next_memory_features, self.grid_size)
-                    
-                    if prior_obs_0 is not None:
-                        reward = self.reward_fn(prior_obs_0, action, obs_0)
-                    else:
-                        reward = 0.0
-                    
-                    prior_obs_0 = next_obs_0
+                    next_obs = next_obs_0
                 else:
                     next_obs_tensor = next_obs_1.as_tensor().astype(np.float32, copy=True)
                     next_memory_features = memory_1.get_memory_features().astype(np.float32, copy=True)
                     next_memory_features = self._pad_memory(next_memory_features, self.grid_size)
-                    
-                    if prior_obs_1 is not None:
-                        reward = self.reward_fn(prior_obs_1, action, obs_1)
-                    else:
-                        reward = 0.0
-                    
-                    prior_obs_1 = next_obs_1
+                    next_obs = next_obs_1
+                
+                reward = self.reward_fn(current_obs, action, next_obs)
+                
+                agent_generals_current = (current_obs.generals & current_obs.owned_cells).sum()
+                agent_generals_next = (next_obs.generals & next_obs.owned_cells).sum()
+                opponent_generals_current = (current_obs.generals & current_obs.opponent_cells).sum()
+                opponent_generals_next = (next_obs.generals & next_obs.opponent_cells).sum()
                 
                 done = np.float32(0.0)
+                if agent_generals_next == 0 and agent_generals_current > 0:
+                    done = np.float32(1.0)
+                    reward += -1.0
+                elif opponent_generals_next == 0 and opponent_generals_current > 0:
+                    done = np.float32(1.0)
+                    reward += 1.0
+                
                 reward = np.float32(reward)
                 
                 yield (obs_tensor, memory_features, action_array, reward, 
                        next_obs_tensor, next_memory_features, done)
+                
+                if done > 0:
+                    break
                 
             except Exception:
                 break
