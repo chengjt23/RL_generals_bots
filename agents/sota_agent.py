@@ -45,18 +45,28 @@ class SOTAAgent(Agent):
         self.memory = MemoryAugmentation((grid_size, grid_size), history_length=7)
         self.last_action = None
         self.opponent_last_action = Action(to_pass=True)
+        self._prev_obs_snapshot: dict[str, np.ndarray] | None = None
     
     def reset(self):
         self.memory.reset()
         self.last_action = None
         self.opponent_last_action = Action(to_pass=True)
+        self._prev_obs_snapshot = None
     
     def act(self, observation: Observation) -> Action:
+        # Keep shapes consistent with training: training pads BEFORE calling MemoryAugmentation.update().
+        observation.pad_observation(pad_to=self.grid_size)
+
+        # Best-effort: infer opponent's last action from (prev_obs -> current_obs) deltas.
+        if self._prev_obs_snapshot is not None:
+            self.opponent_last_action = self._infer_opponent_action(self._prev_obs_snapshot, observation)
+
+        # Update memory with the *current* observation and the *previous* actions.
         if self.last_action is not None:
             self.memory.update(
                 self._obs_to_dict(observation),
-                self.last_action,
-                self.opponent_last_action
+                np.asarray(self.last_action, dtype=np.int8),
+                np.asarray(self.opponent_last_action, dtype=np.int8),
             )
         
         obs_tensor = self._prepare_observation(observation)
@@ -69,27 +79,71 @@ class SOTAAgent(Agent):
         
         action = self._sample_action(policy_logits, observation)
         self.last_action = action
+
+        # Snapshot current observation for next-step opponent-action inference.
+        self._prev_obs_snapshot = self._snapshot_observation(observation)
         
         return action
     
     def _obs_to_dict(self, obs: Observation) -> dict:
+        """Convert Observation to dict format needed by MemoryAugmentation"""
+        tensor = obs.as_tensor()
         return {
-            "armies": obs.armies,
-            "generals": obs.generals,
-            "cities": obs.cities,
-            "mountains": obs.mountains,
-            "neutral_cells": obs.neutral_cells,
-            "owned_cells": obs.owned_cells,
-            "opponent_cells": obs.opponent_cells,
-            "fog_cells": obs.fog_cells,
-            "structures_in_fog": obs.structures_in_fog,
+            'fog_cells': tensor[0],
+            'structures_in_fog': tensor[1],
+            'cities': tensor[2],
+            'generals': tensor[3],
+            'owned_cells': tensor[4],
+            'opponent_cells': tensor[5],
         }
     
     def _prepare_observation(self, obs: Observation) -> torch.Tensor:
+        # `act()` already pads; keep this idempotent for safety.
         obs.pad_observation(pad_to=self.grid_size)
         obs_tensor = torch.from_numpy(obs.as_tensor()).float()
         obs_tensor = obs_tensor.unsqueeze(0).to(self.device)
         return obs_tensor
+
+    def _snapshot_observation(self, obs: Observation) -> dict[str, np.ndarray]:
+        # Only store fields needed for opponent-action inference.
+        return {
+            'armies': np.asarray(obs.armies).copy(),
+            'opponent_cells': np.asarray(obs.opponent_cells).copy(),
+            'fog_cells': np.asarray(obs.fog_cells).copy(),
+            'structures_in_fog': np.asarray(obs.structures_in_fog).copy(),
+        }
+
+    def _infer_opponent_action(self, prev: dict[str, np.ndarray], obs: Observation) -> Action:
+        """Heuristic opponent action inference.
+
+        Training has access to true opponent actions; inference typically does not.
+        This tries to recover a plausible move only when a new opponent cell becomes visible.
+        """
+        fog = np.asarray(obs.fog_cells)
+        sif = np.asarray(obs.structures_in_fog)
+        visible = (fog == 0) & (sif == 0)
+
+        prev_opp = prev['opponent_cells']
+        cur_opp = np.asarray(obs.opponent_cells)
+
+        # Newly visible opponent-owned cells (candidate destination).
+        new_opp = visible & (cur_opp.astype(bool)) & (~prev_opp.astype(bool))
+        new_positions = np.argwhere(new_opp)
+        if new_positions.shape[0] != 1:
+            return Action(to_pass=True)
+
+        dest_r, dest_c = (int(new_positions[0][0]), int(new_positions[0][1]))
+
+        # Candidate sources: adjacent cells that were opponent-owned previously.
+        for direction, (dr, dc) in enumerate([(-1, 0), (1, 0), (0, -1), (0, 1)]):
+            src_r, src_c = dest_r - dr, dest_c - dc
+            if src_r < 0 or src_c < 0 or src_r >= self.grid_size or src_c >= self.grid_size:
+                continue
+            if prev_opp[src_r, src_c] == 1:
+                # Split is unknown; default to full move.
+                return Action(to_pass=False, row=src_r, col=src_c, direction=direction, to_split=False)
+
+        return Action(to_pass=True)
     
     def _prepare_memory(self) -> torch.Tensor:
         memory_features = self.memory.get_memory_features()
