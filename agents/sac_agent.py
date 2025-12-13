@@ -71,7 +71,12 @@ class SACAgent(Agent):
         
         actor_state_dict = {k: v for k, v in bc_state_dict.items() if k.startswith('backbone.') or k.startswith('policy_head.')}
         missing, unexpected = self.actor.load_state_dict(actor_state_dict, strict=False)
-        print(f"  Actor: Loaded {len(actor_state_dict)} parameters from BC model")
+        
+        actor_num_params = sum(p.numel() for p in self.actor.parameters())
+        actor_loaded_params = sum(v.numel() for v in actor_state_dict.values())
+        
+        print(f"  Actor: Loaded {len(actor_state_dict)} parameter tensors ({actor_loaded_params:,} values)")
+        print(f"         Total actor parameters: {actor_num_params:,}")
         if missing:
             print(f"         Missing keys: {missing}")
         if unexpected:
@@ -80,7 +85,12 @@ class SACAgent(Agent):
         critic_state_dict = {k: v for k, v in bc_state_dict.items() if k.startswith('backbone.')}
         self.critic_1.load_state_dict(critic_state_dict, strict=False)
         self.critic_2.load_state_dict(critic_state_dict, strict=False)
-        print(f"  Critics: Loaded {len(critic_state_dict)} parameters")
+        
+        critic_num_params = sum(p.numel() for p in self.critic_1.parameters())
+        critic_loaded_params = sum(v.numel() for v in critic_state_dict.values())
+        
+        print(f"  Critics: Loaded {len(critic_state_dict)} parameter tensors ({critic_loaded_params:,} values)")
+        print(f"           Total critic parameters (each): {critic_num_params:,}")
     
     def load(self, model_path):
         ckpt = torch.load(model_path, map_location=self.device, weights_only=False)
