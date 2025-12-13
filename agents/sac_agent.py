@@ -44,12 +44,6 @@ class SACAgent(Agent):
 
         if bc_model_path is not None:
             self.load_bc_weights(bc_model_path)
-            
-        if model_path is not None:
-            self.load(model_path)
-        
-        self.critic_1_target.load_state_dict(self.critic_1.state_dict())
-        self.critic_2_target.load_state_dict(self.critic_2.state_dict())
         
         action_space_size = 9 * grid_size * grid_size
         self.target_entropy = float(-np.log(1.0 / action_space_size) * 0.98)
@@ -57,6 +51,12 @@ class SACAgent(Agent):
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(list(self.critic_1.parameters()) + list(self.critic_2.parameters()), lr=critic_lr)
         self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr)
+        
+        if model_path is not None:
+            self.load(model_path)
+        else:
+            self.critic_1_target.load_state_dict(self.critic_1.state_dict())
+            self.critic_2_target.load_state_dict(self.critic_2.state_dict())
         
         self.memory = MemoryAugmentation((grid_size, grid_size), history_length=7)
         self.last_action = None
