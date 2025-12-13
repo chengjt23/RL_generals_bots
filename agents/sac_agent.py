@@ -83,16 +83,59 @@ class SACAgent(Agent):
         print(f"  Critics: Loaded {len(critic_state_dict)} parameters")
     
     def load(self, model_path):
-        ckpt = torch.load(model_path, map_location=self.device)
+        ckpt = torch.load(model_path, map_location=self.device, weights_only=False)
+        
         if 'actor_state_dict' in ckpt:
             self.actor.load_state_dict(ckpt['actor_state_dict'])
+            print(f"  Loaded actor state dict")
+        
         if 'critic_1_state_dict' in ckpt:
             self.critic_1.load_state_dict(ckpt['critic_1_state_dict'])
+            print(f"  Loaded critic_1 state dict")
+        
         if 'critic_2_state_dict' in ckpt:
             self.critic_2.load_state_dict(ckpt['critic_2_state_dict'])
+            print(f"  Loaded critic_2 state dict")
+        
+        if 'critic_1_target_state_dict' in ckpt:
+            self.critic_1_target.load_state_dict(ckpt['critic_1_target_state_dict'])
+            print(f"  Loaded critic_1_target state dict")
+        else:
+            self.critic_1_target.load_state_dict(self.critic_1.state_dict())
+            print(f"  Initialized critic_1_target from critic_1")
+        
+        if 'critic_2_target_state_dict' in ckpt:
+            self.critic_2_target.load_state_dict(ckpt['critic_2_target_state_dict'])
+            print(f"  Loaded critic_2_target state dict")
+        else:
+            self.critic_2_target.load_state_dict(self.critic_2.state_dict())
+            print(f"  Initialized critic_2_target from critic_2")
+        
+        if 'actor_optimizer' in ckpt:
+            self.actor_optimizer.load_state_dict(ckpt['actor_optimizer'])
+            print(f"  Loaded actor optimizer state")
+        
+        if 'critic_optimizer' in ckpt:
+            self.critic_optimizer.load_state_dict(ckpt['critic_optimizer'])
+            print(f"  Loaded critic optimizer state")
+        
+        if 'alpha_optimizer' in ckpt:
+            self.alpha_optimizer.load_state_dict(ckpt['alpha_optimizer'])
+            print(f"  Loaded alpha optimizer state")
+        
         if 'log_alpha' in ckpt:
-             with torch.no_grad():
-                self.log_alpha.copy_(ckpt['log_alpha'])
+            with torch.no_grad():
+                if isinstance(ckpt['log_alpha'], torch.Tensor):
+                    self.log_alpha.copy_(ckpt['log_alpha'].to(self.device))
+                else:
+                    self.log_alpha.fill_(ckpt['log_alpha'])
+            print(f"  Loaded log_alpha: {self.log_alpha.item():.4f}")
+        
+        epoch = ckpt.get('epoch', 0)
+        global_step = ckpt.get('global_step', 0)
+        print(f"  Checkpoint info: epoch={epoch}, global_step={global_step}")
+        
+        return epoch, global_step
 
     def reset(self):
         self.memory.reset()

@@ -17,16 +17,22 @@ except ImportError:
 
 
 class OfflineSACTrainer:
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, resume_checkpoint: str = None):
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
         
         self.device = self.config['training']['device']
+        self.resume_checkpoint = resume_checkpoint
         self.setup_seed()
         self.setup_dirs()
         self.setup_agent()
         self.setup_data()
         self.setup_wandb()
+        
+        self.start_epoch = 0
+        self.start_step = 0
+        if self.resume_checkpoint:
+            self.load_checkpoint()
     
     def setup_seed(self):
         seed = self.config['training']['seed']
@@ -90,7 +96,7 @@ class OfflineSACTrainer:
         save_frequency = self.config['training']['save_frequency']
         steps_per_epoch = self.config['training'].get('steps_per_epoch', None)
         
-        global_step = 0
+        global_step = self.start_step
         
         print("\n" + "="*60)
         print("Offline SAC Training")
@@ -98,13 +104,16 @@ class OfflineSACTrainer:
         print(f"Training mode: Offline (using replay data)")
         print(f"Data source: {self.config['data']['data_dir']}")
         print(f"BC pretrain: {self.config['experiment']['bc_pretrain_path']}")
+        if self.resume_checkpoint:
+            print(f"Resuming from: {self.resume_checkpoint}")
+            print(f"Start epoch: {self.start_epoch}, Start step: {self.start_step}")
         print(f"Total epochs: {total_epochs}")
         print(f"Batch size: {self.config['training']['batch_size']}")
         if steps_per_epoch:
             print(f"Steps per epoch: {steps_per_epoch}")
         print("="*60 + "\n")
         
-        for epoch in range(total_epochs):
+        for epoch in range(self.start_epoch, total_epochs):
             epoch_losses = {
                 'critic_loss': [],
                 'actor_loss': [],
@@ -176,36 +185,47 @@ class OfflineSACTrainer:
             print(f"  Entropy: {avg_epoch_metrics['entropy']:.4f}")
             
             if (epoch + 1) % save_frequency == 0:
-                self.save_checkpoint(f"epoch_{epoch+1}")
+                self.save_checkpoint(f"epoch_{epoch+1}", epoch=epoch+1, global_step=global_step)
         
-        self.save_checkpoint('final')
+        self.save_checkpoint('final', epoch=total_epochs, global_step=global_step)
         print("\n" + "="*60)
         print("Training completed!")
         print(f"Checkpoints saved to: {self.checkpoint_dir}")
         print("="*60)
     
-    def save_checkpoint(self, name):
+    def save_checkpoint(self, name, epoch=None, global_step=None):
         checkpoint = {
             'name': name,
+            'epoch': epoch,
+            'global_step': global_step,
             'actor_state_dict': self.agent.actor.state_dict(),
             'critic_1_state_dict': self.agent.critic_1.state_dict(),
             'critic_2_state_dict': self.agent.critic_2.state_dict(),
+            'critic_1_target_state_dict': self.agent.critic_1_target.state_dict(),
+            'critic_2_target_state_dict': self.agent.critic_2_target.state_dict(),
             'actor_optimizer': self.agent.actor_optimizer.state_dict(),
             'critic_optimizer': self.agent.critic_optimizer.state_dict(),
-            'log_alpha': self.agent.log_alpha.item(),
+            'alpha_optimizer': self.agent.alpha_optimizer.state_dict(),
+            'log_alpha': self.agent.log_alpha.detach().cpu(),
         }
         
         save_path = self.checkpoint_dir / f'{name}.pt'
         torch.save(checkpoint, save_path)
         print(f"Saved checkpoint: {save_path}")
+    
+    def load_checkpoint(self):
+        print(f"\nLoading checkpoint from: {self.resume_checkpoint}")
+        self.start_epoch, self.start_step = self.agent.load(self.resume_checkpoint)
+        print(f"Resuming from epoch {self.start_epoch}, step {self.start_step}\n")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='configs/config_offline_sac.yaml')
+    parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     args = parser.parse_args()
     
-    trainer = OfflineSACTrainer(args.config)
+    trainer = OfflineSACTrainer(args.config, resume_checkpoint=args.resume)
     trainer.train()
 
 
