@@ -12,6 +12,7 @@ from .memory import MemoryAugmentation
 class SOTAAgent(Agent):
     def __init__(
         self,
+        sota_config,
         id: str = "SOTA",
         grid_size: int = 24,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
@@ -19,14 +20,16 @@ class SOTAAgent(Agent):
         memory_channels: int = 18,
     ):
         super().__init__(id)
+        assert sota_config is not None, "sota_config must be provided"
+        assert sota_config['grid_size'] == grid_size, "grid_size in sota_config must match the provided grid_size"
         self.grid_size = grid_size
         self.device = torch.device(device)
         
         self.network = SOTANetwork(
-            obs_channels=15,
-            memory_channels=memory_channels,
-            grid_size=grid_size,
-            base_channels=64,
+            obs_channels=sota_config['obs_channels'],
+            memory_channels=sota_config['memory_channels'],
+            grid_size=sota_config['grid_size'],
+            base_channels=sota_config['base_channels'],
         ).to(self.device)
         
         if model_path is not None:
