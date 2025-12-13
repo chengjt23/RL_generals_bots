@@ -184,8 +184,8 @@ class OfflineSACDataset(IterableDataset):
                 next_obs_0_dict = self._obs_to_dict(next_obs_0)
                 next_obs_1_dict = self._obs_to_dict(next_obs_1)
                 
-                memory_0.update(obs_0_dict, actions["player_0"], actions["player_1"])
-                memory_1.update(obs_1_dict, actions["player_1"], actions["player_0"])
+                memory_0.update(next_obs_0_dict, actions["player_0"], actions["player_1"])
+                memory_1.update(next_obs_1_dict, actions["player_1"], actions["player_0"])
                 
                 if player_idx == 0:
                     next_obs_tensor = next_obs_0.as_tensor().astype(np.float32, copy=True)

@@ -214,6 +214,9 @@ class SACAgent(Agent):
         directions = actions[:, 3].long()
         splits = actions[:, 4].long()
         
+        rows = torch.where(is_pass == 1, torch.zeros_like(rows), rows)
+        cols = torch.where(is_pass == 1, torch.zeros_like(cols), cols)
+        
         action_channel = torch.where(
             is_pass == 1,
             torch.zeros_like(is_pass),
