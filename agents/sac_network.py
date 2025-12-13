@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .network import UNetBackbone, ConvBlock
+from .network import UNetBackbone, PolicyHead, ConvBlock
 
 
 class SACActor(nn.Module):
@@ -10,10 +10,7 @@ class SACActor(nn.Module):
         self.memory_channels = memory_channels
         total_channels = obs_channels + memory_channels
         self.backbone = UNetBackbone(total_channels, base_channels)
-        self.policy_head = nn.Sequential(
-            ConvBlock(base_channels, 32),
-            nn.Conv2d(32, 9, 1)
-        )
+        self.policy_head = PolicyHead(base_channels, grid_size)
     
     def forward(self, obs, memory=None):
         if memory is None:

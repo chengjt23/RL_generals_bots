@@ -70,11 +70,17 @@ class SACAgent(Agent):
             bc_state_dict = ckpt
         
         actor_state_dict = {k: v for k, v in bc_state_dict.items() if k.startswith('backbone.') or k.startswith('policy_head.')}
-        self.actor.load_state_dict(actor_state_dict, strict=False)
+        missing, unexpected = self.actor.load_state_dict(actor_state_dict, strict=False)
+        print(f"  Actor: Loaded {len(actor_state_dict)} parameters from BC model")
+        if missing:
+            print(f"         Missing keys: {missing}")
+        if unexpected:
+            print(f"         Unexpected keys: {unexpected}")
         
         critic_state_dict = {k: v for k, v in bc_state_dict.items() if k.startswith('backbone.')}
         self.critic_1.load_state_dict(critic_state_dict, strict=False)
         self.critic_2.load_state_dict(critic_state_dict, strict=False)
+        print(f"  Critics: Loaded {len(critic_state_dict)} parameters")
     
     def load(self, model_path):
         ckpt = torch.load(model_path, map_location=self.device)
