@@ -1,6 +1,7 @@
 import sys
 sys.path.append('..')
 
+import os
 import argparse
 import torch
 import yaml
@@ -9,14 +10,26 @@ from agents.sac_agent import SACAgent
 from agents.sota_agent import SOTAAgent
 from generals.envs import PettingZooGenerals
 
+try:
+    import pygame
+    from PIL import Image
+    GIF_AVAILABLE = True
+except ImportError:
+    GIF_AVAILABLE = False
+    print("Warning: pygame or PIL not available, GIF recording disabled")
 
-def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbose: bool = False):
+
+def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbose: bool = False, save_gif: bool = False, gif_path: str = "first_game.gif"):
     print("\n" + "="*70)
     print("SAC Agent vs BC Model Competition")
     print("="*70)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
+    
+    if save_gif and not GIF_AVAILABLE:
+        print("Warning: Cannot save GIF (pygame or PIL not installed)")
+        save_gif = False
     
     print(f"\nLoading models...")
     sac_agent = SACAgent(
@@ -45,7 +58,12 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
     )
     print(f"  BC Agent loaded from: {bc_model_path}")
     
-    env = PettingZooGenerals(agents=["SAC", "BC"], render_mode=None)
+    render_mode = "human" if (save_gif and GIF_AVAILABLE) else None
+    if render_mode == "human":
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
+        import pygame
+    
+    env = PettingZooGenerals(agents=["SAC", "BC"], render_mode=render_mode)
     
     sac_wins = 0
     bc_wins = 0
@@ -53,7 +71,11 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
     bc_rewards = []
     game_lengths = []
     
+    frames = []
+    
     print(f"\nStarting {num_games} games...")
+    if save_gif:
+        print(f"Recording first game to {gif_path}...")
     print("="*70)
     
     for game_num in range(num_games):
@@ -66,6 +88,8 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
         bc_episode_reward = 0
         step = 0
         
+        recording = save_gif and game_num == 0
+        
         while not (terminated or truncated):
             sac_action = sac_agent.act(obs_dict["SAC"], deterministic=True)
             bc_action = bc_agent.act(obs_dict["BC"])
@@ -75,6 +99,19 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
             sac_episode_reward += rewards_dict["SAC"]
             bc_episode_reward += rewards_dict["BC"]
             step += 1
+            
+            if recording:
+                env.render()
+                try:
+                    renderer = env.gui._GUI__renderer
+                    surface = renderer.screen
+                    img_str = pygame.image.tostring(surface, 'RGB')
+                    img = Image.frombytes('RGB', surface.get_size(), img_str)
+                    frames.append(img)
+                except (AttributeError, NameError):
+                    if step == 1:
+                        print("Warning: Could not capture frames for GIF")
+                    recording = False
         
         game_lengths.append(step)
         sac_rewards.append(sac_episode_reward)
@@ -96,6 +133,21 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
                   f"BC reward: {bc_episode_reward:6.1f}")
     
     env.close()
+    
+    if frames and save_gif:
+        print(f"\nSaving GIF with {len(frames)} frames to '{gif_path}'...")
+        try:
+            frames[0].save(
+                gif_path,
+                save_all=True,
+                append_images=frames[1:],
+                optimize=False,
+                duration=100,
+                loop=0
+            )
+            print(f"✓ GIF saved successfully to {gif_path}")
+        except Exception as e:
+            print(f"✗ Failed to save GIF: {e}")
     
     total_games = num_games
     draws = total_games - sac_wins - bc_wins
@@ -153,12 +205,18 @@ if __name__ == '__main__':
                        help='Number of games to play (default: 100)')
     parser.add_argument('--verbose', action='store_true',
                        help='Print result for every game')
+    parser.add_argument('--save_gif', action='store_true',
+                       help='Save first game as GIF')
+    parser.add_argument('--gif_path', type=str, default='first_game.gif',
+                       help='Path to save GIF file (default: first_game.gif)')
     args = parser.parse_args()
     
     compete(
         sac_checkpoint=args.sac_checkpoint,
         bc_model_path=args.bc_model,
         num_games=args.num_games,
-        verbose=args.verbose
+        verbose=args.verbose,
+        save_gif=args.save_gif,
+        gif_path=args.gif_path
     )
 
