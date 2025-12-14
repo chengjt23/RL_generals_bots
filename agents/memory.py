@@ -11,6 +11,8 @@ class MemoryAugmentation:
     def reset(self):
         self.discovered_castles = np.zeros(self.grid_shape, dtype=np.float32)
         self.discovered_generals = np.zeros(self.grid_shape, dtype=np.float32)
+        self.discovered_mountains = np.zeros(self.grid_shape, dtype=np.float32)
+        self.last_seen_armies = np.zeros(self.grid_shape, dtype=np.float32)
         self.explored_cells = np.zeros(self.grid_shape, dtype=np.float32)
         self.opponent_visible_cells = np.zeros(self.grid_shape, dtype=np.float32)
         self.action_history = deque(maxlen=self.history_length * 2)
@@ -20,10 +22,15 @@ class MemoryAugmentation:
         
         castles_mask = observation["cities"]
         generals_mask = observation["generals"]
+        mountains_mask = observation["mountains"]
+        
         self.discovered_castles = np.maximum(self.discovered_castles, castles_mask * visible_mask)
         self.discovered_generals = np.maximum(self.discovered_generals, generals_mask * visible_mask)
+        self.discovered_mountains = np.maximum(self.discovered_mountains, mountains_mask)
         
-        self.explored_cells = np.maximum(self.explored_cells, observation["owned_cells"])
+        self.last_seen_armies = np.where(visible_mask > 0, observation["armies"], self.last_seen_armies)
+        
+        self.explored_cells = np.maximum(self.explored_cells, visible_mask)
         
         opponent_mask = observation["opponent_cells"]
         self.opponent_visible_cells = np.maximum(self.opponent_visible_cells, opponent_mask)
@@ -34,6 +41,8 @@ class MemoryAugmentation:
         memory_channels = [
             self.discovered_castles,
             self.discovered_generals,
+            self.discovered_mountains,
+            self.last_seen_armies,
             self.explored_cells,
             self.opponent_visible_cells,
         ]
