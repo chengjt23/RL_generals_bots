@@ -85,16 +85,35 @@ class SOTAAgent(Agent):
         
         return action
     
+
+    """
+    
+Key	Shape	Description
+0armies	(N,M)	Number of units in a visible cell regardless of the owner
+1generals	(N,M)	Mask indicating visible cells containing a general
+2cities	(N,M)	Mask indicating visible cells containing a city
+3mountains	(N,M)	Mask indicating visible cells containing mountains
+4neutral_cells	(N,M)	Mask indicating visible cells that are not owned by any agent
+5owned_cells	(N,M)	Mask indicating visible cells owned by the agent
+6opponent_cells	(N,M)	Mask indicating visible cells owned by the opponent
+7fog_cells	(N,M)	Mask indicating fog cells that are not mountains or cities
+8structures_in_fog	(N,M)	Mask showing cells containing either cities or mountains in fog
+
+    """
+    
     def _obs_to_dict(self, obs: Observation) -> dict:
         """Convert Observation to dict format needed by MemoryAugmentation"""
         tensor = obs.as_tensor()
         return {
-            'fog_cells': tensor[0],
-            'structures_in_fog': tensor[1],
+            'armies': tensor[0],
+            'generals': tensor[1],
             'cities': tensor[2],
-            'generals': tensor[3],
-            'owned_cells': tensor[4],
-            'opponent_cells': tensor[5],
+            'mountains': tensor[3],
+            'neutral_cells': tensor[4],
+            'owned_cells': tensor[5],
+            'opponent_cells': tensor[6],
+            'fog_cells': tensor[7],
+            'structures_in_fog': tensor[8],
         }
     
     def _prepare_observation(self, obs: Observation) -> torch.Tensor:

@@ -234,18 +234,20 @@ class GeneralsReplayIterableDataset(IterableDataset):
             return 3
         return -1
     
-    def _obs_to_dict(self, obs: Observation) -> Dict:
+    def _obs_to_dict(self, obs: Observation) -> dict:
         """Convert Observation to dict format needed by MemoryAugmentation"""
         tensor = obs.as_tensor()
         return {
-            'fog_cells': tensor[0],
-            'structures_in_fog': tensor[1],
+            'armies': tensor[0],
+            'generals': tensor[1],
             'cities': tensor[2],
-            'generals': tensor[3],
-            'owned_cells': tensor[4],
-            'opponent_cells': tensor[5],
+            'mountains': tensor[3],
+            'neutral_cells': tensor[4],
+            'owned_cells': tensor[5],
+            'opponent_cells': tensor[6],
+            'fog_cells': tensor[7],
+            'structures_in_fog': tensor[8],
         }
-
 
 def create_iterable_dataloader(
     data_dir: str,
