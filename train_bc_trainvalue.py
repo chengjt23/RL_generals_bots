@@ -139,11 +139,15 @@ class BehaviorCloningTrainerWithValue:
     def setup_optimizer(self):
         opt_config = self.config['optimizer']
         
+        # Get AWL learning rate from config (default 0.01)
+        self.awl_lr = self.config['training'].get('awl_lr', 0.01)
+        
         # Create optimizer with separate parameter groups
         # AWL parameters must have weight_decay=0 to prevent forcing weights back to 0.5
+        # AWL uses a higher learning rate for faster adaptation
         self.optimizer = torch.optim.AdamW([
             {'params': self.model.parameters()},
-            {'params': self.awl.parameters(), 'weight_decay': 0.0}
+            {'params': self.awl.parameters(), 'lr': self.awl_lr, 'weight_decay': 0.0}
         ],
             lr=self.config['training']['learning_rate'],
             betas=opt_config['betas'],
@@ -264,12 +268,97 @@ class BehaviorCloningTrainerWithValue:
         for target_param, param in zip(self.target_model.parameters(), self.model.parameters()):
             target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     
+    def _diagnose_nan(self, value_pred, next_obs, next_memory, n_step_returns, dones, 
+                      policy_loss, value_loss, batch_idx, epoch):
+        """Diagnose NaN in losses and output detailed information"""
+        print("\n" + "="*80)
+        print("🚨 NaN DETECTED! 🚨")
+        print("="*80)
+        print(f"Epoch: {epoch}, Batch: {batch_idx}, Global Step: {self.global_step}")
+        print(f"Policy Loss: {policy_loss.item() if not torch.isnan(policy_loss) else 'NaN'}")
+        print(f"Value Loss: {value_loss.item() if not torch.isnan(value_loss) else 'NaN'}")
+        
+        # Get detailed value information
+        with torch.no_grad():
+            _, next_value = self.target_model(next_obs, next_memory)
+            next_value = next_value.squeeze(-1)
+            td_target = n_step_returns + (self.gamma ** self.n_step) * next_value * (1.0 - dones)
+            
+            if self.value_clip is not None:
+                td_target_unclipped = td_target.clone()
+                td_target = torch.clamp(td_target, min=-self.value_clip, max=self.value_clip)
+            
+            value_pred_squeezed = value_pred.squeeze(-1)
+            
+            print("\n--- Value Predictions ---")
+            print(f"Value Pred - Mean: {value_pred_squeezed.mean().item():.4f}, "
+                  f"Std: {value_pred_squeezed.std().item():.4f}")
+            print(f"Value Pred - Min: {value_pred_squeezed.min().item():.4f}, "
+                  f"Max: {value_pred_squeezed.max().item():.4f}")
+            print(f"Value Pred - Has NaN: {torch.isnan(value_pred_squeezed).any().item()}")
+            print(f"Value Pred - Has Inf: {torch.isinf(value_pred_squeezed).any().item()}")
+            
+            print("\n--- TD Targets ---")
+            print(f"TD Target - Mean: {td_target.mean().item():.4f}, "
+                  f"Std: {td_target.std().item():.4f}")
+            print(f"TD Target - Min: {td_target.min().item():.4f}, "
+                  f"Max: {td_target.max().item():.4f}")
+            print(f"TD Target - Has NaN: {torch.isnan(td_target).any().item()}")
+            print(f"TD Target - Has Inf: {torch.isinf(td_target).any().item()}")
+            
+            if self.value_clip is not None:
+                print(f"\n--- Before Clipping ---")
+                print(f"TD Target (unclipped) - Min: {td_target_unclipped.min().item():.4f}, "
+                      f"Max: {td_target_unclipped.max().item():.4f}")
+                print(f"Clipped values: {(td_target_unclipped.abs() > self.value_clip).sum().item()} / {td_target.numel()}")
+            
+            print("\n--- Next Value Estimates ---")
+            print(f"Next Value - Mean: {next_value.mean().item():.4f}, "
+                  f"Std: {next_value.std().item():.4f}")
+            print(f"Next Value - Min: {next_value.min().item():.4f}, "
+                  f"Max: {next_value.max().item():.4f}")
+            print(f"Next Value - Has NaN: {torch.isnan(next_value).any().item()}")
+            print(f"Next Value - Has Inf: {torch.isinf(next_value).any().item()}")
+            
+            print("\n--- N-step Returns ---")
+            print(f"N-step Returns - Mean: {n_step_returns.mean().item():.4f}, "
+                  f"Std: {n_step_returns.std().item():.4f}")
+            print(f"N-step Returns - Min: {n_step_returns.min().item():.4f}, "
+                  f"Max: {n_step_returns.max().item():.4f}")
+            print(f"N-step Returns - Has NaN: {torch.isnan(n_step_returns).any().item()}")
+            print(f"N-step Returns - Has Inf: {torch.isinf(n_step_returns).any().item()}")
+            
+            print("\n--- Done Flags ---")
+            print(f"Done flags - Sum: {dones.sum().item()} / {dones.numel()}")
+            
+            print("\n--- AWL Weights ---")
+            s_policy = self.awl.params[0]
+            s_value = self.awl.params[1]
+            weight_policy = 0.5 * torch.exp(-s_policy)
+            weight_value = 0.5 * torch.exp(-s_value)
+            print(f"Policy Weight: {weight_policy.item():.6f}")
+            print(f"Value Weight: {weight_value.item():.6f}")
+            print(f"Sigma Policy: {torch.exp(0.5 * s_policy).item():.6f}")
+            print(f"Sigma Value: {torch.exp(0.5 * s_value).item():.6f}")
+            
+            print("\n--- Model Parameters Check ---")
+            nan_params = sum(1 for p in self.model.parameters() if torch.isnan(p).any())
+            inf_params = sum(1 for p in self.model.parameters() if torch.isinf(p).any())
+            print(f"Parameters with NaN: {nan_params}")
+            print(f"Parameters with Inf: {inf_params}")
+            
+        print("="*80)
+        print("Training will continue, but you should investigate the cause!")
+        print("="*80 + "\n")
+    
     def train_epoch(self, epoch: int):
         self.model.train()
         total_loss = 0.0
         total_policy_loss = 0.0
         total_value_loss = 0.0
         num_batches = 0
+        nan_count = 0
+        max_consecutive_nans = 10  # Stop if too many consecutive NaNs
         
         pbar = tqdm(
             self.train_loader,
@@ -296,6 +385,11 @@ class BehaviorCloningTrainerWithValue:
                     policy_loss = self.compute_policy_loss(obs, actions, policy_logits)
                     value_loss = self.compute_value_loss(value_pred, next_obs, next_memory, n_step_returns, dones)
                     
+                    # NaN Detection
+                    if torch.isnan(value_loss) or torch.isnan(policy_loss):
+                        self._diagnose_nan(value_pred, next_obs, next_memory, n_step_returns, dones, 
+                                          policy_loss, value_loss, batch_idx, epoch)
+                    
                     # Use Automatic Weighted Loss (Kendall & Gal, 2018)
                     loss = self.awl(policy_loss, value_loss)
                 
@@ -312,6 +406,11 @@ class BehaviorCloningTrainerWithValue:
                 policy_loss = self.compute_policy_loss(obs, actions, policy_logits)
                 value_loss = self.compute_value_loss(value_pred, next_obs, next_memory, n_step_returns, dones)
                 
+                # NaN Detection
+                if torch.isnan(value_loss) or torch.isnan(policy_loss):
+                    self._diagnose_nan(value_pred, next_obs, next_memory, n_step_returns, dones,
+                                      policy_loss, value_loss, batch_idx, epoch)
+                
                 # Use Automatic Weighted Loss (Kendall & Gal, 2018)
                 loss = self.awl(policy_loss, value_loss)
                 
@@ -327,17 +426,28 @@ class BehaviorCloningTrainerWithValue:
             
             self.scheduler.step()
             
+            # Check for NaN in total loss
+            if torch.isnan(loss):
+                print(f"\n⚠️ Total loss is NaN at batch {batch_idx}! Skipping this batch...")
+                nan_count += 1
+                if nan_count >= max_consecutive_nans:
+                    print(f"\n❌ Too many consecutive NaN losses ({nan_count})! Stopping epoch early.")
+                    break
+                continue
+            else:
+                nan_count = 0  # Reset counter on successful batch
+            
             total_loss += loss.item()
             total_policy_loss += policy_loss.item()
-            total_value_loss += value_loss.item()
+            total_value_loss += value_loss.item() if not torch.isnan(value_loss) else 0.0
             num_batches += 1
             
             if num_batches >= self.steps_per_epoch:
                 break
             
-            avg_loss = total_loss / num_batches
-            avg_policy_loss = total_policy_loss / num_batches
-            avg_value_loss = total_value_loss / num_batches
+            avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+            avg_policy_loss = total_policy_loss / num_batches if num_batches > 0 else 0.0
+            avg_value_loss = total_value_loss / num_batches if num_batches > 0 else 0.0
             
             # Compute actual weights from AWL parameters
             with torch.no_grad():
@@ -346,19 +456,21 @@ class BehaviorCloningTrainerWithValue:
                 weight_policy = 0.5 * torch.exp(-s_policy)
                 weight_value = 0.5 * torch.exp(-s_value)
             
+            # Safe formatting for display
+            loss_str = f"{loss.item():.4f}" if not torch.isnan(loss) else "nan"
+            policy_str = f"{policy_loss.item():.4f}" if not torch.isnan(policy_loss) else "nan"
+            value_str = f"{value_loss.item():.4f}" if not torch.isnan(value_loss) else "nan"
+            
             pbar.set_postfix({
-                'loss': f"{loss.item():.4f}",
-                'policy': f"{policy_loss.item():.4f}",
-                'value': f"{value_loss.item():.4f}",
+                'loss': loss_str,
+                'policy': policy_str,
+                'value': value_str,
                 'w_val': f"{weight_value.item():.3f}",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
-                wandb.log({
-                    'train/loss': loss.item(),
-                    'train/policy_loss': policy_loss.item(),
-                    'train/value_loss': value_loss.item(),
+                log_dict = {
                     'train/avg_loss': avg_loss,
                     'train/avg_policy_loss': avg_policy_loss,
                     'train/avg_value_loss': avg_value_loss,
@@ -370,7 +482,22 @@ class BehaviorCloningTrainerWithValue:
                     'meta/weight_value': weight_value.item(),
                     'meta/sigma_policy': torch.exp(0.5 * s_policy).item(),
                     'meta/sigma_value': torch.exp(0.5 * s_value).item(),
-                }, step=self.global_step)
+                }
+                
+                # Only log non-NaN values
+                if not torch.isnan(loss):
+                    log_dict['train/loss'] = loss.item()
+                if not torch.isnan(policy_loss):
+                    log_dict['train/policy_loss'] = policy_loss.item()
+                if not torch.isnan(value_loss):
+                    log_dict['train/value_loss'] = value_loss.item()
+                
+                # Add NaN detection flags
+                log_dict['debug/has_nan_loss'] = torch.isnan(loss).item()
+                log_dict['debug/has_nan_value'] = torch.isnan(value_loss).item()
+                log_dict['debug/has_nan_policy'] = torch.isnan(policy_loss).item()
+                
+                wandb.log(log_dict, step=self.global_step)
             
             self.global_step += 1
         
@@ -410,7 +537,7 @@ class BehaviorCloningTrainerWithValue:
         print(f"Epochs: {self.config['training']['num_epochs']}")
         print(f"Steps per epoch: {self.steps_per_epoch}")
         print(f"Batch size: {self.config['training']['batch_size']}")
-        print(f"Learning rate: {self.config['training']['learning_rate']}")
+        print(f"Learning rate: {self.config['training']['learning_rate']} (Model), {self.awl_lr} (AWL)")
         print(f"Loss weighting: Automatic (Kendall & Gal, 2018)")
         print(f"N-step: {self.n_step}, Gamma: {self.gamma}, Tau: {self.tau}, Value clip: {self.value_clip}")
         if self.early_stopping_enabled:
