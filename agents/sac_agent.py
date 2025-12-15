@@ -26,6 +26,10 @@ class SACAgent(Agent):
         actor_lr: float = 3e-4,
         critic_lr: float = 3e-4,
         alpha_lr: float = 3e-4,
+        # Offline RL parameters
+        cql_alpha: float = 0.0,           # CQL penalty weight (0 = disabled)
+        bc_weight: float = 0.0,           # BC regularization weight (0 = disabled)
+        gradient_clip: float = 1.0,       # Gradient clipping
     ):
         super().__init__(id)
         self.grid_size = grid_size
@@ -33,6 +37,11 @@ class SACAgent(Agent):
         self.gamma = gamma
         self.tau = tau
         self.auto_tune_alpha = auto_tune_alpha
+        
+        # Offline RL settings
+        self.cql_alpha = cql_alpha
+        self.bc_weight = bc_weight
+        self.gradient_clip = gradient_clip
         
         self.actor = SACActor(obs_channels=15, memory_channels=memory_channels, grid_size=grid_size, base_channels=64).to(self.device)
         self.critic_1 = SACCritic(obs_channels=15, memory_channels=memory_channels, grid_size=grid_size, base_channels=64).to(self.device)
@@ -247,6 +256,7 @@ class SACAgent(Agent):
         next_memory = batch['next_memories']
         dones = batch['dones']
         
+        # ============ Critic Update with CQL ============
         with torch.no_grad():
             next_policy_logits = self.actor(next_obs, next_memory)
             q1_next = self.critic_1_target(next_obs, next_memory)
@@ -267,6 +277,7 @@ class SACAgent(Agent):
         q1 = self.critic_1(obs, memory)
         q2 = self.critic_2(obs, memory)
         
+        # Compute action indices
         is_pass = actions[:, 0].long()
         rows = torch.clamp(actions[:, 1], 0, h - 1).long()
         cols = torch.clamp(actions[:, 2], 0, w - 1).long()
@@ -286,12 +297,30 @@ class SACAgent(Agent):
         q1_pred = q1[batch_indices, action_channel, rows, cols]
         q2_pred = q2[batch_indices, action_channel, rows, cols]
         
-        critic_loss = F.mse_loss(q1_pred, target_q) + F.mse_loss(q2_pred, target_q)
+        # Standard Bellman loss
+        bellman_loss = F.mse_loss(q1_pred, target_q) + F.mse_loss(q2_pred, target_q)
+        
+        # CQL penalty (if enabled)
+        cql_loss = torch.tensor(0.0, device=obs.device)
+        if self.cql_alpha > 0:
+            q1_flat = q1.view(batch_size, -1)
+            q2_flat = q2.view(batch_size, -1)
+            q1_logsumexp = torch.logsumexp(q1_flat, dim=-1)
+            q2_logsumexp = torch.logsumexp(q2_flat, dim=-1)
+            cql_loss = (q1_logsumexp.mean() - q1_pred.mean() + 
+                        q2_logsumexp.mean() - q2_pred.mean())
+        
+        critic_loss = bellman_loss + self.cql_alpha * cql_loss
         
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            list(self.critic_1.parameters()) + list(self.critic_2.parameters()),
+            max_norm=self.gradient_clip
+        )
         self.critic_optimizer.step()
         
+        # ============ Actor Update with BC Regularization ============
         policy_logits = self.actor(obs, memory)
         q1_new = self.critic_1(obs, memory)
         q2_new = self.critic_2(obs, memory)
@@ -301,13 +330,28 @@ class SACAgent(Agent):
         log_probs = F.log_softmax(policy_logits.view(batch_size, -1), dim=-1)
         min_q_new_flat = min_q_new.view(batch_size, -1)
         
+        # Standard SAC actor loss
         alpha = self.log_alpha.exp()
-        actor_loss = (policy_probs * (alpha * log_probs - min_q_new_flat)).sum(dim=-1).mean()
+        sac_actor_loss = (policy_probs * (alpha * log_probs - min_q_new_flat)).sum(dim=-1).mean()
+        
+        # BC regularization (if enabled)
+        bc_loss = torch.tensor(0.0, device=obs.device)
+        if self.bc_weight > 0:
+            # Compute flat action indices
+            action_indices_flat = action_channel * h * w + rows * w + cols
+            expert_log_probs = log_probs[batch_indices, action_indices_flat]
+            bc_loss = -expert_log_probs.mean()
+        
+        actor_loss = sac_actor_loss + self.bc_weight * bc_loss
         
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            self.actor.parameters(), max_norm=self.gradient_clip
+        )
         self.actor_optimizer.step()
         
+        # ============ Alpha Update ============
         if self.auto_tune_alpha:
             entropy = -(policy_probs * log_probs).sum(dim=-1).mean()
             alpha_loss = -(self.log_alpha * (entropy - torch.tensor(self.target_entropy, dtype=torch.float32, device=self.device)).detach())
@@ -315,12 +359,17 @@ class SACAgent(Agent):
             alpha_loss.backward()
             self.alpha_optimizer.step()
         
+        # ============ Target Network Update ============
         self._soft_update(self.critic_1, self.critic_1_target)
         self._soft_update(self.critic_2, self.critic_2_target)
         
         return {
             'critic_loss': critic_loss.item(),
+            'bellman_loss': bellman_loss.item(),
+            'cql_loss': cql_loss.item(),
             'actor_loss': actor_loss.item(),
+            'sac_actor_loss': sac_actor_loss.item(),
+            'bc_loss': bc_loss.item(),
             'alpha': alpha.item(),
             'entropy': entropy.item() if self.auto_tune_alpha else 0.0
         }

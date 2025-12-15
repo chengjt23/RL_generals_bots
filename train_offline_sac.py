@@ -52,6 +52,8 @@ class OfflineSACTrainer:
             yaml.dump(self.config, f)
     
     def setup_agent(self):
+        from agents.sac_network import initialize_critic_from_bc_value
+        
         self.agent = SACAgent(
             id="OfflineSAC",
             grid_size=self.config['model']['grid_size'],
@@ -65,8 +67,25 @@ class OfflineSACTrainer:
             actor_lr=self.config['training']['actor_lr'],
             critic_lr=self.config['training']['critic_lr'],
             alpha_lr=self.config['training']['alpha_lr'],
+            # Offline RL parameters
+            cql_alpha=self.config['training'].get('cql_alpha', 0.0),
+            bc_weight=self.config['training'].get('bc_weight', 0.0),
+            gradient_clip=self.config['training'].get('gradient_clip', 1.0),
         )
-        print(f"Loaded BC pretrained weights from: {self.config['experiment']['bc_pretrain_path']}")
+        
+        # Initialize critics from BC checkpoint (if CQL or BC regularization is enabled)
+        bc_path = self.config['experiment']['bc_pretrain_path']
+        if self.config['training'].get('cql_alpha', 0) > 0 or self.config['training'].get('bc_weight', 0) > 0:
+            print("\nInitializing critics from BC Value Head...")
+            initialize_critic_from_bc_value(self.agent.critic_1, bc_path, self.device)
+            initialize_critic_from_bc_value(self.agent.critic_2, bc_path, self.device)
+            
+            # Copy to target networks
+            self.agent.critic_1_target.load_state_dict(self.agent.critic_1.state_dict())
+            self.agent.critic_2_target.load_state_dict(self.agent.critic_2.state_dict())
+            print("Initialized target networks from critics\n")
+        
+        print(f"Loaded BC pretrained weights from: {bc_path}")
     
     def setup_data(self):
         self.dataloader = create_offline_sac_dataloader(
@@ -99,11 +118,14 @@ class OfflineSACTrainer:
         global_step = self.start_step
         
         print("\n" + "="*60)
-        print("Offline SAC Training")
+        print("Offline SAC Training with CQL + BC Regularization")
         print("="*60)
         print(f"Training mode: Offline (using replay data)")
         print(f"Data source: {self.config['data']['data_dir']}")
         print(f"BC pretrain: {self.config['experiment']['bc_pretrain_path']}")
+        print(f"CQL alpha: {self.config['training'].get('cql_alpha', 0.0)}")
+        print(f"BC weight: {self.config['training'].get('bc_weight', 0.0)}")
+        print(f"Gradient clip: {self.config['training'].get('gradient_clip', 1.0)}")
         if self.resume_checkpoint:
             print(f"Resuming from: {self.resume_checkpoint}")
             print(f"Start epoch: {self.start_epoch}, Start step: {self.start_step}")
@@ -116,7 +138,11 @@ class OfflineSACTrainer:
         for epoch in range(self.start_epoch, total_epochs):
             epoch_losses = {
                 'critic_loss': [],
+                'bellman_loss': [],
+                'cql_loss': [],
                 'actor_loss': [],
+                'sac_actor_loss': [],
+                'bc_loss': [],
                 'alpha': [],
                 'entropy': []
             }
@@ -151,10 +177,10 @@ class OfflineSACTrainer:
                     break
                 
                 if global_step % log_frequency == 0:
-                    avg_critic_loss = np.mean(epoch_losses['critic_loss'][-100:])
-                    avg_actor_loss = np.mean(epoch_losses['actor_loss'][-100:])
-                    avg_alpha = np.mean(epoch_losses['alpha'][-100:])
-                    avg_entropy = np.mean(epoch_losses['entropy'][-100:])
+                    avg_critic_loss = np.mean(epoch_losses['critic_loss'][-100:]) if epoch_losses['critic_loss'] else 0
+                    avg_actor_loss = np.mean(epoch_losses['actor_loss'][-100:]) if epoch_losses['actor_loss'] else 0
+                    avg_alpha = np.mean(epoch_losses['alpha'][-100:]) if epoch_losses['alpha'] else 0
+                    avg_entropy = np.mean(epoch_losses['entropy'][-100:]) if epoch_losses['entropy'] else 0
                     
                     pbar.set_postfix({
                         'c_loss': f'{avg_critic_loss:.3f}',
@@ -164,14 +190,19 @@ class OfflineSACTrainer:
                     })
                     
                     if self.use_wandb:
-                        wandb.log({
+                        log_dict = {
                             'critic_loss': avg_critic_loss,
+                            'bellman_loss': np.mean(epoch_losses['bellman_loss'][-100:]) if epoch_losses['bellman_loss'] else 0,
+                            'cql_loss': np.mean(epoch_losses['cql_loss'][-100:]) if epoch_losses['cql_loss'] else 0,
                             'actor_loss': avg_actor_loss,
+                            'sac_actor_loss': np.mean(epoch_losses['sac_actor_loss'][-100:]) if epoch_losses['sac_actor_loss'] else 0,
+                            'bc_loss': np.mean(epoch_losses['bc_loss'][-100:]) if epoch_losses['bc_loss'] else 0,
                             'alpha': avg_alpha,
                             'entropy': avg_entropy,
                             'epoch': epoch,
                             'step': global_step
-                        }, step=global_step)
+                        }
+                        wandb.log(log_dict, step=global_step)
             
             avg_epoch_metrics = {
                 key: np.mean(values) if values else 0.0 

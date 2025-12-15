@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .network import UNetBackbone, PolicyHead, ConvBlock
+from .network import UNetBackbone, PolicyHead, ConvBlock, ResidualBlock
 
 
 class SACActor(nn.Module):
@@ -53,9 +53,14 @@ class SACCritic(nn.Module):
         self.memory_channels = memory_channels
         total_channels = obs_channels + memory_channels
         self.backbone = UNetBackbone(total_channels, base_channels)
+        
+        # Enhanced Q head structure (similar to Value Head)
+        # ConvBlock(64→64) → ResidualBlock(64) → ConvBlock(64→32) → Conv2d(32→9)
         self.q_head = nn.Sequential(
-            ConvBlock(base_channels, 32),
-            nn.Conv2d(32, 9, 1)
+            ConvBlock(base_channels, 64),
+            ResidualBlock(64),
+            ConvBlock(64, 32),
+            nn.Conv2d(32, 9, 1)  # Output 9 action Q-values
         )
     
     def forward(self, obs, memory=None):
@@ -65,4 +70,56 @@ class SACCritic(nn.Module):
         features = self.backbone(x)
         q_values = self.q_head(features)
         return q_values
+
+
+def initialize_critic_from_bc_value(critic, bc_checkpoint_path, device):
+    """Initialize critic's Q head from BC model's Value head
+    
+    Args:
+        critic: SACCritic instance to initialize
+        bc_checkpoint_path: Path to BC model checkpoint
+        device: Device to load checkpoint on
+    
+    Returns:
+        critic: Initialized critic
+    """
+    ckpt = torch.load(bc_checkpoint_path, map_location=device, weights_only=False)
+    bc_state_dict = ckpt.get('model_state_dict', ckpt)
+    
+    # 1. Initialize backbone
+    backbone_dict = {k.replace('backbone.', ''): v 
+                     for k, v in bc_state_dict.items() 
+                     if k.startswith('backbone.')}
+    missing, unexpected = critic.backbone.load_state_dict(backbone_dict, strict=False)
+    print(f"  Critic backbone: loaded {len(backbone_dict)} parameters")
+    
+    # 2. Initialize Q Head's first 3 layers from Value Head
+    # Value Head structure: conv.0 (ConvBlock), conv.1 (ResidualBlock), conv.2 (ConvBlock)
+    # Q Head structure: 0 (ConvBlock), 1 (ResidualBlock), 2 (ConvBlock), 3 (Conv2d output)
+    value_conv_mapping = {
+        'conv.0': '0',  # ConvBlock(64→64)
+        'conv.1': '1',  # ResidualBlock(64)
+        'conv.2': '2',  # ConvBlock(64→32)
+    }
+    
+    loaded_layers = 0
+    for value_key, q_key in value_conv_mapping.items():
+        value_prefix = f'value_head.{value_key}.'
+        q_prefix = f'{q_key}.'
+        
+        layer_dict = {k.replace(value_prefix, q_prefix): v 
+                      for k, v in bc_state_dict.items() 
+                      if k.startswith(value_prefix)}
+        
+        if layer_dict:
+            # Load into corresponding Q head layer
+            q_layer = critic.q_head[int(q_key)]
+            remapped_dict = {k.replace(q_prefix, ''): v for k, v in layer_dict.items()}
+            q_layer.load_state_dict(remapped_dict, strict=False)
+            loaded_layers += len(remapped_dict)
+    
+    print(f"  Q head: initialized first 3 layers with {loaded_layers} parameters from Value head")
+    print(f"  Q head output layer (9 channels): randomly initialized")
+    
+    return critic
 

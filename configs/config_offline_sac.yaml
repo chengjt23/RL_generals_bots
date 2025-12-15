@@ -1,5 +1,5 @@
 experiment:
-  name: "offline_sac"
+  name: "offline_sac_cql_bc"
   bc_pretrain_path: "./experiments/epoch_13_loss_1.6560.pt"
   save_dir: "experiments"
 
@@ -19,17 +19,25 @@ training:
   device: "cuda"
   seed: 42
   
+  # SAC parameters
   gamma: 0.99
   tau: 0.005
   alpha: 0.2
   auto_tune_alpha: true
   
+  # Offline RL parameters (set to 0 to disable)
+  cql_alpha: 2.0          # CQL penalty weight (0=disabled, typical: 1.0-5.0)
+  bc_weight: 0.1          # BC regularization weight (0=disabled, typical: 0.05-0.5)
+  gradient_clip: 1.0      # Gradient clipping for stability
+  
+  # Training schedule
   epochs: 20
   batch_size: 128
   steps_per_epoch: 3000
   
-  actor_lr: 0.00003
-  critic_lr: 0.0001
+  # Learning rates (lower for offline RL)
+  actor_lr: 0.00001       # Reduced from 0.00003
+  critic_lr: 0.00003      # Reduced from 0.0001
   alpha_lr: 0.0001
   
   log_frequency: 100
