@@ -326,8 +326,7 @@ class BehaviorCloningTrainer:
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
                 wandb.log({
-                    'train/loss': batch_
-                    'train/loss': loss.item(),
+                    'train/loss': batch_loss.item(),
                     'train/avg_loss': avg_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
                     'train/step': self.global_step,
