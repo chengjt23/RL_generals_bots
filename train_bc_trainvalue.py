@@ -137,24 +137,26 @@ class BehaviorCloningTrainerWithValue:
             n_step=n_step,
         )
         
-        # Validation loader also with N-step TD (to compute complete loss including value)
-        # Use a smaller subset for faster validation
-        val_steps = self.config['training'].get('val_steps_per_epoch', 1000)
-        self.val_loader = create_iterable_dataloader_with_value(
+        # Validation loader uses standard dataset (only for policy evaluation)
+        from data.dataloader import GeneralsReplayDataset
+        val_dataset = GeneralsReplayDataset(
             data_dir=data_config['data_dir'],
-            batch_size=train_config['batch_size'],
             grid_size=data_config['grid_size'],
-            num_workers=max(1, train_config['num_workers'] // 2),  # Use fewer workers for validation
             max_replays=val_replays,
             min_stars=data_config['min_stars'],
             max_turns=data_config['max_turns'],
-            gamma=gamma,
-            n_step=n_step,
         )
         
-        self.val_steps = val_steps
+        self.val_loader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=train_config['batch_size'],
+            shuffle=False,
+            num_workers=train_config['num_workers'],
+            pin_memory=True,
+        )
+        
         print(f"Train loader created with {n_step}-step TD targets")
-        print(f"Val loader created with {n_step}-step TD targets, {val_steps} steps per validation")
+        print(f"Val samples: {len(val_dataset)}")
     
     def setup_optimizer(self):
         opt_config = self.config['optimizer']
@@ -560,11 +562,12 @@ class BehaviorCloningTrainerWithValue:
     
     @torch.no_grad()
     def validate(self):
+        """
+        Validation only evaluates policy loss (not value loss).
+        This is because the validation dataset doesn't include N-step TD targets.
+        """
         self.model.eval()
-        self.target_model.eval()
         total_loss = 0.0
-        total_policy_loss = 0.0
-        total_value_loss = 0.0
         num_batches = 0
         
         pbar = tqdm(
@@ -572,56 +575,34 @@ class BehaviorCloningTrainerWithValue:
             desc="Validation",
             unit="batch",
             ncols=120,
-            leave=False,
-            total=self.val_steps
+            leave=False
         )
         
-        for obs, memory, actions, n_step_returns, next_obs, next_memory, dones, _ in pbar:
+        for obs, memory, actions, _ in pbar:
             obs = obs.to(self.device)
             memory = memory.to(self.device)
             actions = actions.to(self.device)
-            n_step_returns = n_step_returns.to(self.device)
-            next_obs = next_obs.to(self.device)
-            next_memory = next_memory.to(self.device)
-            dones = dones.to(self.device)
             
-            policy_logits, value_pred = self.model(obs, memory)
-            policy_loss = self.compute_policy_loss(obs, actions, policy_logits)
-            value_loss = self.compute_value_loss(value_pred, next_obs, next_memory, n_step_returns, dones)
-            
-            # Use AWL to combine losses (same as training)
-            loss = self.awl(policy_loss, value_loss)
+            policy_logits, _ = self.model(obs, memory)
+            loss = self.compute_policy_loss(obs, actions, policy_logits)
             
             total_loss += loss.item()
-            total_policy_loss += policy_loss.item()
-            total_value_loss += value_loss.item()
             num_batches += 1
             
-            if num_batches >= self.val_steps:
-                break
-            
             avg_loss = total_loss / num_batches
-            avg_policy_loss = total_policy_loss / num_batches
-            avg_value_loss = total_value_loss / num_batches
-            pbar.set_postfix({
-                'loss': f"{avg_loss:.4f}",
-                'policy': f"{avg_policy_loss:.4f}",
-                'value': f"{avg_value_loss:.4f}"
-            })
+            pbar.set_postfix({'val_loss': f"{avg_loss:.4f}"})
         
         final_avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-        final_avg_policy_loss = total_policy_loss / num_batches if num_batches > 0 else 0.0
-        final_avg_value_loss = total_value_loss / num_batches if num_batches > 0 else 0.0
         
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
             wandb.log({
                 'val/loss': final_avg_loss,
-                'val/policy_loss': final_avg_policy_loss,
-                'val/value_loss': final_avg_value_loss,
+                'val/policy_loss': final_avg_loss,  # Same as val_loss
                 'val/step': self.global_step,
             }, step=self.global_step)
         
-        return final_avg_loss, final_avg_policy_loss, final_avg_value_loss
+        # Return (val_loss, val_policy_loss, 0.0 for value_loss)
+        return final_avg_loss, final_avg_loss, 0.0
     
     def save_checkpoint(self, epoch: int, train_loss: float, val_loss: float, val_policy_loss: float):
         ckpt_path = self.ckpt_dir / f"epoch_{epoch}_loss_{train_loss:.4f}-{val_loss:.4f}-{val_policy_loss:.4f}.pt"
@@ -684,7 +665,7 @@ class BehaviorCloningTrainerWithValue:
             
             print(f"Epoch {epoch:3d}/{num_epochs} | "
                   f"Train: {train_loss:.4f} (P:{train_policy_loss:.4f} V:{train_value_loss:.4f}) | "
-                  f"Val: {val_loss:.4f} (P:{val_policy_loss:.4f} V:{val_value_loss:.4f}) | "
+                  f"Val: {val_loss:.4f} | "
                   f"LR: {self.scheduler.get_last_lr()[0]:.2e}")
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
@@ -695,7 +676,6 @@ class BehaviorCloningTrainerWithValue:
                     'epoch/train_value_loss': train_value_loss,
                     'epoch/val_loss': val_loss,
                     'epoch/val_policy_loss': val_policy_loss,
-                    'epoch/val_value_loss': val_value_loss,
                     'epoch/learning_rate': self.scheduler.get_last_lr()[0],
                 }, step=self.global_step)
             
