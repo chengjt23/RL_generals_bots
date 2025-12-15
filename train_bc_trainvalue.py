@@ -232,6 +232,7 @@ class BehaviorCloningTrainerWithValue:
         """
         Compute n-step TD loss:
         Target = n_step_return + gamma^n * V_target(s_{t+n}) * (1 - done)
+        Using Huber loss for robustness to outliers
         """
         with torch.no_grad():
             _, next_value = self.target_model(next_obs, next_memory)
@@ -245,7 +246,7 @@ class BehaviorCloningTrainerWithValue:
                 td_target = torch.clamp(td_target, min=-self.value_clip, max=self.value_clip)
         
         value_pred = value_pred.squeeze(-1)
-        return F.mse_loss(value_pred, td_target)
+        return F.smooth_l1_loss(value_pred, td_target)
     
     def soft_update_target_network(self):
         """Soft update target network: θ_target ← τ*θ + (1-τ)*θ_target"""

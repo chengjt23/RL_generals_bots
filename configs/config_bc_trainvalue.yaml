@@ -8,10 +8,10 @@ training:
   weight_decay: 0.0001
   
   # N-step TD parameters
-  n_step: 50              # N-step lookahead (推荐30-50)
+  n_step: 5              # N-step lookahead (推荐30-50)
   gamma: 0.99             # Discount factor (推荐0.99或0.995，不要用1.0！)
   tau: 0.005              # Target network soft update coefficient (推荐0.005)
-  value_weight: 0.5       # Weight for value loss (推荐0.5)
+  value_weight: 10       # Weight for value loss (推荐0.5)
   value_clip: 10.0        # Clip value targets to [-value_clip, +value_clip] (推荐10.0)
   
   save_top_k: 5
