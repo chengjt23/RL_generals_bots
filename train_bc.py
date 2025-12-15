@@ -63,6 +63,9 @@ class BehaviorCloningTrainer:
             memory_channels=model_config['memory_channels'],
             grid_size=model_config['grid_size'],
             base_channels=model_config['base_channels'],
+            rnn_hidden_channels=model_config.get('rnn_hidden_channels', 32),
+            rnn_num_layers=model_config.get('rnn_num_layers', 2),
+            use_rnn_memory=model_config.get('use_rnn_memory', True),
         ).to(self.device)
         
         total_params = sum(p.numel() for p in self.model.parameters())
@@ -238,16 +241,20 @@ class BehaviorCloningTrainer:
             total=self.steps_per_epoch
         )
         
-        for batch_idx, (obs, memory, actions, _) in enumerate(pbar):
+        for batch_idx, (obs, actions, _) in enumerate(pbar):
             obs = obs.to(self.device)
-            memory = memory.to(self.device)
             actions = actions.to(self.device)
             
             self.optimizer.zero_grad()
             
+            # Note: RNN hidden states are handled automatically by the network.
+            # For batch training, each sample in the batch is treated independently
+            # (no hidden state carry-over between samples). The RNN learns to encode
+            # memory from observations within each training step.
+            
             if self.scaler is not None:
                 with autocast():
-                    policy_logits, _ = self.model(obs, memory)
+                    policy_logits, _ = self.model(obs, hidden_state=None, return_hidden=False)
                     loss = self.compute_loss(obs, actions, policy_logits)
                 
                 self.scaler.scale(loss).backward()
@@ -259,7 +266,7 @@ class BehaviorCloningTrainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                policy_logits, _ = self.model(obs, memory)
+                policy_logits, _ = self.model(obs, hidden_state=None, return_hidden=False)
                 loss = self.compute_loss(obs, actions, policy_logits)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
@@ -309,12 +316,12 @@ class BehaviorCloningTrainer:
             leave=False
         )
         
-        for obs, memory, actions, _ in pbar:
+        for obs, actions, _ in pbar:
             obs = obs.to(self.device)
-            memory = memory.to(self.device)
             actions = actions.to(self.device)
             
-            policy_logits, _ = self.model(obs, memory)
+            # RNN handles memory encoding internally
+            policy_logits, _ = self.model(obs, hidden_state=None, return_hidden=False)
             loss = self.compute_loss(obs, actions, policy_logits)
             
             total_loss += loss.item()

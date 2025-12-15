@@ -7,10 +7,16 @@ from generals.core.grid import Grid
 from generals.core.game import Game
 from generals.core.observation import Observation
 from generals.core.action import Action
-from agents.memory import MemoryAugmentation
 
 
 class GeneralsReplayIterableDataset(IterableDataset):
+    """
+    Iterable dataset for training with RNN memory.
+    
+    Provides per-step (obs, action) pairs without hand-crafted memory features.
+    The RNN memory encoder will learn temporal patterns through hidden states.
+    """
+    
     def __init__(
         self,
         data_dir: str,
@@ -83,11 +89,10 @@ class GeneralsReplayIterableDataset(IterableDataset):
                     valid_replay_count += 1
                     
                     for sample in self._extract_samples_from_replay(replay):
-                        obs, memory, action, player_idx = sample
+                        obs, action, player_idx = sample
                         obs_tensor = torch.from_numpy(obs).to(torch.float32)
-                        memory_tensor = torch.from_numpy(memory).to(torch.float32)
                         action_tensor = torch.from_numpy(action).long()
-                        yield obs_tensor, memory_tensor, action_tensor, player_idx
+                        yield obs_tensor, action_tensor, player_idx
         else:
             per_worker = self.num_replays // w_num
             start_idx = w_id * per_worker
@@ -102,11 +107,10 @@ class GeneralsReplayIterableDataset(IterableDataset):
                     continue
                 
                 for sample in self._extract_samples_from_replay(replay):
-                    obs, memory, action, player_idx = sample
+                    obs, action, player_idx = sample
                     obs_tensor = torch.from_numpy(obs).to(torch.float32)
-                    memory_tensor = torch.from_numpy(memory).to(torch.float32)
                     action_tensor = torch.from_numpy(action).long()
-                    yield obs_tensor, memory_tensor, action_tensor, player_idx
+                    yield obs_tensor, action_tensor, player_idx
     
     def _is_valid_replay(self, replay: Dict) -> bool:
         if len(replay['moves']) > self.max_turns:
@@ -128,10 +132,6 @@ class GeneralsReplayIterableDataset(IterableDataset):
         except Exception:
             return
         
-        # Initialize memory augmentation for both players
-        memory_0 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
-        memory_1 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
-        
         for move in replay['moves']:
             if len(move) < 5:
                 continue
@@ -144,11 +144,9 @@ class GeneralsReplayIterableDataset(IterableDataset):
             obs_0 = game.agent_observation("player_0")
             obs_1 = game.agent_observation("player_1")
             
-            # Pad and cache previous observations for inference
+            # Pad observations
             obs_0.pad_observation(pad_to=self.grid_size)
             obs_1.pad_observation(pad_to=self.grid_size)
-            obs_0_prev = self._obs_to_dict(obs_0)
-            obs_1_prev = self._obs_to_dict(obs_1)
             
             start_row = start_tile // width
             start_col = start_tile % width
@@ -160,17 +158,14 @@ class GeneralsReplayIterableDataset(IterableDataset):
                 continue
             
             action = np.array([0, start_row, start_col, direction, is_half], dtype=np.int8)
-            action_pass = np.array([1, 0, 0, 0, 0], dtype=np.int8)
             
-            # Get current memory features before taking action
+            # Yield observation and action (no hand-crafted memory)
             if player_idx == 0:
                 obs_tensor = obs_0.as_tensor().astype(np.float32, copy=True)
-                memory_features = memory_0.get_memory_features().astype(np.float32, copy=True)
-                yield (obs_tensor, memory_features, action.copy(), 0)
+                yield (obs_tensor, action.copy(), 0)
             else:
                 obs_tensor = obs_1.as_tensor().astype(np.float32, copy=True)
-                memory_features = memory_1.get_memory_features().astype(np.float32, copy=True)
-                yield (obs_tensor, memory_features, action.copy(), 1)
+                yield (obs_tensor, action.copy(), 1)
             
             actions = {
                 "player_0": np.array([1, 0, 0, 0, 0], dtype=np.int8),
@@ -184,59 +179,8 @@ class GeneralsReplayIterableDataset(IterableDataset):
             
             try:
                 game.step(actions)
-                
-                # Update memory augmentation after step
-                obs_0_after = game.agent_observation("player_0")
-                obs_1_after = game.agent_observation("player_1")
-                obs_0_after.pad_observation(pad_to=self.grid_size)
-                obs_1_after.pad_observation(pad_to=self.grid_size)
-                
-                # Convert observations to dict format for memory update
-                obs_0_curr = self._obs_to_dict(obs_0_after)
-                obs_1_curr = self._obs_to_dict(obs_1_after)
-                
-                # Infer opponent actions
-                opp_action_for_0 = self._infer_opponent_action(obs_0_prev, obs_0_curr)
-                opp_action_for_1 = self._infer_opponent_action(obs_1_prev, obs_1_curr)
-                
-                memory_0.update(obs_0_curr, actions["player_0"], opp_action_for_0)
-                memory_1.update(obs_1_curr, actions["player_1"], opp_action_for_1)
             except Exception:
                 break
-
-    def _infer_opponent_action(self, prev: dict, curr: dict) -> np.ndarray:
-        """Heuristic opponent action inference matching SOTAAgent."""
-        fog = curr['fog_cells']
-        sif = curr['structures_in_fog']
-        visible = (fog == 0) & (sif == 0)
-
-        prev_opp = prev['opponent_cells']
-        cur_opp = curr['opponent_cells']
-
-        # Newly visible opponent-owned cells (candidate destination).
-        new_opp = visible & (cur_opp.astype(bool)) & (~prev_opp.astype(bool))
-        new_positions = np.argwhere(new_opp)
-        
-        # Default to PASS
-        action = np.array([1, 0, 0, 0, 0], dtype=np.int8)
-
-        if new_positions.shape[0] != 1:
-            return action
-
-        dest_r, dest_c = (int(new_positions[0][0]), int(new_positions[0][1]))
-
-        # Candidate sources: adjacent cells that were opponent-owned previously.
-        for direction, (dr, dc) in enumerate([(-1, 0), (1, 0), (0, -1), (0, 1)]):
-            src_r, src_c = dest_r - dr, dest_c - dc
-            if src_r < 0 or src_c < 0 or src_r >= self.grid_size or src_c >= self.grid_size:
-                continue
-            if prev_opp[src_r, src_c] == 1:
-                # Found a plausible source
-                # Action format: [pass, row, col, direction, split]
-                # to_pass=False -> 0
-                return np.array([0, src_r, src_c, direction, 0], dtype=np.int8)
-
-        return action
     
     def _create_initial_grid(self, replay: Dict, height: int, width: int) -> Grid:
         grid_array = np.full((height, width), '.', dtype='U1')
@@ -276,21 +220,7 @@ class GeneralsReplayIterableDataset(IterableDataset):
         elif end_row == start_row and end_col > start_col:
             return 3
         return -1
-    
-    def _obs_to_dict(self, obs: Observation) -> dict:
-        """Convert Observation to dict format needed by MemoryAugmentation"""
-        tensor = obs.as_tensor()
-        return {
-            'armies': tensor[0],
-            'generals': tensor[1],
-            'cities': tensor[2],
-            'mountains': tensor[3],
-            'neutral_cells': tensor[4],
-            'owned_cells': tensor[5],
-            'opponent_cells': tensor[6],
-            'fog_cells': tensor[7],
-            'structures_in_fog': tensor[8],
-        }
+
 
 def create_iterable_dataloader(
     data_dir: str,

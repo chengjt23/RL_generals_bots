@@ -30,9 +30,12 @@ data:
 
 model:
   obs_channels: 15
-  memory_channels: 20
+  memory_channels: 16  # Output channels from RNN memory encoder
   base_channels: 64
   grid_size: 24
+  rnn_hidden_channels: 32  # Hidden channels in RNN layers
+  rnn_num_layers: 2  # Number of ConvLSTM layers
+  use_rnn_memory: true  # Enable RNN memory encoding
 
 optimizer:
   type: adamw

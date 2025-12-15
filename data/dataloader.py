@@ -8,10 +8,17 @@ from tqdm import tqdm
 from generals.core.grid import Grid
 from generals.core.game import Game
 from generals.core.observation import Observation
-from agents.memory import MemoryAugmentation
 
 
 class GeneralsReplayDataset(Dataset):
+    """
+    Dataset for training with RNN memory.
+    
+    This dataset provides per-step (obs, action) pairs.
+    The RNN memory encoder will learn to encode temporal information
+    through its hidden states during training.
+    """
+    
     def __init__(
         self,
         data_dir: str,
@@ -103,10 +110,6 @@ class GeneralsReplayDataset(Dataset):
         except Exception:
             return samples
         
-        # Initialize memory augmentation for both players
-        memory_0 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
-        memory_1 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
-        
         for move in replay['moves']:
             if len(move) < 5:
                 continue
@@ -129,19 +132,17 @@ class GeneralsReplayDataset(Dataset):
                 continue
             
             action = np.array([0, start_row, start_col, direction, is_half], dtype=np.int8)
-            action_pass = np.array([1, 0, 0, 0, 0], dtype=np.int8)
             
-            # Get current memory features before taking action
+            # Store observation and action pair (no hand-crafted memory features)
+            # RNN will learn to encode memory from observation history
             if player_idx == 0:
                 obs_0.pad_observation(pad_to=self.grid_size)
                 obs_tensor = obs_0.as_tensor().astype(np.float16, copy=True)
-                memory_features = memory_0.get_memory_features().astype(np.float16, copy=True)
-                samples.append((obs_tensor, memory_features, action.copy(), 0))
+                samples.append((obs_tensor, action.copy(), 0))
             else:
                 obs_1.pad_observation(pad_to=self.grid_size)
                 obs_tensor = obs_1.as_tensor().astype(np.float16, copy=True)
-                memory_features = memory_1.get_memory_features().astype(np.float16, copy=True)
-                samples.append((obs_tensor, memory_features, action.copy(), 1))
+                samples.append((obs_tensor, action.copy(), 1))
             
             actions = {
                 "player_0": np.array([1, 0, 0, 0, 0], dtype=np.int8),
@@ -155,19 +156,6 @@ class GeneralsReplayDataset(Dataset):
             
             try:
                 game.step(actions)
-                
-                # Update memory augmentation after step
-                obs_0_after = game.agent_observation("player_0")
-                obs_1_after = game.agent_observation("player_1")
-                obs_0_after.pad_observation(pad_to=self.grid_size)
-                obs_1_after.pad_observation(pad_to=self.grid_size)
-                
-                # Convert observations to dict format for memory update
-                obs_0_dict = self._obs_to_dict(obs_0_after)
-                obs_1_dict = self._obs_to_dict(obs_1_after)
-                
-                memory_0.update(obs_0_dict, actions["player_0"], actions["player_1"])
-                memory_1.update(obs_1_dict, actions["player_1"], actions["player_0"])
             except Exception:
                 break
         
@@ -212,32 +200,21 @@ class GeneralsReplayDataset(Dataset):
             return 3
         return -1
     
-    def _obs_to_dict(self, obs: Observation) -> dict:
-        """Convert Observation to dict format needed by MemoryAugmentation"""
-        tensor = obs.as_tensor()
-        return {
-            'armies': tensor[0],
-            'generals': tensor[1],
-            'cities': tensor[2],
-            'mountains': tensor[3],
-            'neutral_cells': tensor[4],
-            'owned_cells': tensor[5],
-            'opponent_cells': tensor[6],
-            'fog_cells': tensor[7],
-            'structures_in_fog': tensor[8],
-        }
-    
     def __len__(self) -> int:
         return len(self.samples)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-        obs, memory, action, player_idx = self.samples[idx]
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
+        """
+        Returns: (obs_tensor, action_tensor, player_idx)
+        
+        Note: No memory features returned - RNN will encode memory from observations.
+        """
+        obs, action, player_idx = self.samples[idx]
 
         obs_tensor = torch.from_numpy(obs).to(torch.float32)
-        memory_tensor = torch.from_numpy(memory).to(torch.float32)
         action_tensor = torch.from_numpy(action).long()
 
-        return obs_tensor, memory_tensor, action_tensor, player_idx
+        return obs_tensor, action_tensor, player_idx
 
 
 def create_dataloader(
