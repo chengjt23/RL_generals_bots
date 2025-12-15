@@ -137,7 +137,7 @@ class BehaviorCloningTrainerWithValue:
             n_step=n_step,
         )
         
-        # Validation loader uses standard dataset (only for policy evaluation)
+        # Validation loader uses standard GeneralsReplayDataset (only for policy evaluation)
         from data.dataloader import GeneralsReplayDataset
         val_dataset = GeneralsReplayDataset(
             data_dir=data_config['data_dir'],
@@ -562,10 +562,7 @@ class BehaviorCloningTrainerWithValue:
     
     @torch.no_grad()
     def validate(self):
-        """
-        Validation only evaluates policy loss (not value loss).
-        This is because the validation dataset doesn't include N-step TD targets.
-        """
+        """Validate only on policy loss (value loss requires N-step TD data)"""
         self.model.eval()
         total_loss = 0.0
         num_batches = 0
