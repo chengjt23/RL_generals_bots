@@ -1,8 +1,8 @@
 training:
-  batch_size: 32  # Reduced batch size for sequences
-  sequence_length: 32  # Length of sequences for RNN training
+  batch_size: 32  # Increased batch size with TBPTT
+  tbptt_steps: 32  # Truncated Backpropagation Through Time steps
   learning_rate: 0.0003
-  num_epochs: 100
+  num_epochs: 30
   steps_per_epoch: 1000
   gradient_clip: 1.0
   warmup_steps: 1000

@@ -252,66 +252,82 @@ class BehaviorCloningTrainer:
             
             # Initialize hidden state for the batch
             hidden_state = None
-            batch_loss = 0.0
-            total_valid_steps = 0
             
-            # Unroll RNN loop
-            for t in range(seq_len):
-                # Mask for valid steps at time t
-                mask = (t < lengths).float()
-                if mask.sum() == 0:
+            # Truncated Backpropagation Through Time (TBPTT)
+            tbptt_steps = self.config['training'].get('tbptt_steps', 32)
+            
+            for t_start in range(0, seq_len, tbptt_steps):
+                t_end = min(t_start + tbptt_steps, seq_len)
+                
+                # Check if any sequence in batch is still valid
+                if (lengths > t_start).sum() == 0:
                     break
                 
-                obs_t = obs_seq[:, t]
-                actions_t = actions_seq[:, t]
+                chunk_loss = 0.0
+                valid_steps_in_chunk = 0
                 
-                if self.scaler is not None:
-                    with autocast():
-                        # Pass hidden state and get updated one
+                # Process chunk
+                for t in range(t_start, t_end):
+                    mask = (t < lengths).float()
+                    if mask.sum() == 0:
+                        break
+                    
+                    obs_t = obs_seq[:, t]
+                    actions_t = actions_seq[:, t]
+                    
+                    if self.scaler is not None:
+                        with autocast():
+                            policy_logits, _, hidden_state = self.model(
+                                obs_t, 
+                                hidden_state=hidden_state, 
+                                return_hidden=True
+                            )
+                            loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
+                            loss_t = (loss_t * mask).sum()
+                            chunk_loss += loss_t
+                    else:
                         policy_logits, _, hidden_state = self.model(
                             obs_t, 
                             hidden_state=hidden_state, 
                             return_hidden=True
                         )
                         loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
-                        # loss_t is (B,)
                         loss_t = (loss_t * mask).sum()
-                        batch_loss += loss_t
-                else:
-                    policy_logits, _, hidden_state = self.model(
-                        obs_t, 
-                        hidden_state=hidden_state, 
-                        return_hidden=True
-                    )
-                    loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
-                    loss_t = (loss_t * mask).sum()
-                    batch_loss += loss_t
+                        chunk_loss += loss_t
+                    
+                    valid_steps_in_chunk += mask.sum()
                 
-                total_valid_steps += mask.sum()
-            
-            # Average loss over all valid steps in the batch
-            batch_loss = batch_loss / (total_valid_steps + 1e-8)
-            
-            if self.scaler is not None:
-                self.scaler.scale(batch_loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config['training']['gradient_clip']
-                )
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                batch_loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config['training']['gradient_clip']
-                )
-                self.optimizer.step()
+                # Normalize loss for the chunk
+                if valid_steps_in_chunk > 0:
+                    chunk_loss = chunk_loss / valid_steps_in_chunk
+                    
+                    # Backward pass for the chunk
+                    if self.scaler is not None:
+                        self.scaler.scale(chunk_loss).backward()
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.config['training']['gradient_clip']
+                        )
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        chunk_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.config['training']['gradient_clip']
+                        )
+                        self.optimizer.step()
+                    
+                    self.optimizer.zero_grad()
+                    
+                    # Detach hidden state for next chunk
+                    if hidden_state is not None:
+                        hidden_state = [(h.detach(), c.detach()) for h, c in hidden_state]
+                    
+                    total_loss += chunk_loss.item()
             
             self.scheduler.step()
-            
-            total_loss += batch_loss.item()
             num_batches += 1
             
             if num_batches >= self.steps_per_epoch:
@@ -319,14 +335,14 @@ class BehaviorCloningTrainer:
             
             avg_loss = total_loss / num_batches
             pbar.set_postfix({
-                'loss': f"{batch_loss.item():.4f}",
+                'loss': f"{chunk_loss.item():.4f}",
                 'avg_loss': f"{avg_loss:.4f}",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
                 wandb.log({
-                    'train/loss': batch_loss.item(),
+                    'train/loss': chunk_loss.item(),
                     'train/avg_loss': avg_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
                     'train/step': self.global_step,
@@ -357,40 +373,58 @@ class BehaviorCloningTrainer:
             
             batch_size, seq_len = obs_seq.shape[:2]
             
+            # Initialize hidden state for the batch
             hidden_state = None
-            batch_loss = 0.0
-            total_valid_steps = 0
             
-            for t in range(seq_len):
-                mask = (t < lengths).float()
-                if mask.sum() == 0:
+            # Truncated Backpropagation Through Time (TBPTT)
+            tbptt_steps = self.config['training'].get('tbptt_steps', 32)
+            
+            for t_start in range(0, seq_len, tbptt_steps):
+                t_end = min(t_start + tbptt_steps, seq_len)
+                
+                # Check if any sequence in batch is still valid
+                if (lengths > t_start).sum() == 0:
                     break
                 
-                obs_t = obs_seq[:, t]
-                actions_t = actions_seq[:, t]
+                chunk_loss = 0.0
+                valid_steps_in_chunk = 0
                 
-                policy_logits, _, hidden_state = self.model(
-                    obs_t, 
-                    hidden_state=hidden_state, 
-                    return_hidden=True
-                )
-                loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
-                loss_t = (loss_t * mask).sum()
-                batch_loss += loss_t
-                total_valid_steps += mask.sum()
+                # Process chunk
+                for t in range(t_start, t_end):
+                    mask = (t < lengths).float()
+                    if mask.sum() == 0:
+                        break
+                    
+                    obs_t = obs_seq[:, t]
+                    actions_t = actions_seq[:, t]
+                    
+                    policy_logits, _, hidden_state = self.model(
+                        obs_t, 
+                        hidden_state=hidden_state, 
+                        return_hidden=True
+                    )
+                    loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
+                    loss_t = (loss_t * mask).sum()
+                    chunk_loss += loss_t
+                    
+                    valid_steps_in_chunk += mask.sum()
+                
+                # Normalize loss for the chunk
+                if valid_steps_in_chunk > 0:
+                    chunk_loss = chunk_loss / valid_steps_in_chunk
+                    
+                    # Detach hidden state for next chunk
+                    if hidden_state is not None:
+                        hidden_state = [(h.detach(), c.detach()) for h, c in hidden_state]
+                    
+                    total_loss += chunk_loss.item()
             
-            batch_loss = batch_loss / (total_valid_steps + 1e-8)
-            
-            total_loss += batch_loss.item()
             num_batches += 1
             
             avg_loss = total_loss / num_batches
             pbar.set_postfix({'val_loss': f"{avg_loss:.4f}"})
         
-        if num_batches == 0:
-            return 0.0
-            
-        final_avg_loss = total_loss / num_batches
+        final_avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
         
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
             wandb.log({
@@ -497,7 +531,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='/root/oyx_fork/configs/config_base.yaml',
+        default='/root/shared-nvme/oyx/bc_v2/configs/config_base.yaml',
         help='Path to config file'
     )
     args = parser.parse_args()
