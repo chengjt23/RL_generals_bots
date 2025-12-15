@@ -116,12 +116,15 @@ class BehaviorCloningTrainerWithValue:
         train_config = self.config['training']
         
         train_replays = int(data_config['max_replays'] * data_config['train_split'])
+        val_replays = data_config['max_replays'] - train_replays
         
         print(f"Train replays (streaming): {train_replays}")
+        print(f"Validation replays: {val_replays}")
         
         gamma = self.config['training'].get('gamma', 0.99)
         n_step = self.config['training'].get('n_step', 50)
         
+        # Training loader with N-step TD
         self.train_loader = create_iterable_dataloader_with_value(
             data_dir=data_config['data_dir'],
             batch_size=train_config['batch_size'],
@@ -134,7 +137,24 @@ class BehaviorCloningTrainerWithValue:
             n_step=n_step,
         )
         
+        # Validation loader also with N-step TD (to compute complete loss including value)
+        # Use a smaller subset for faster validation
+        val_steps = self.config['training'].get('val_steps_per_epoch', 1000)
+        self.val_loader = create_iterable_dataloader_with_value(
+            data_dir=data_config['data_dir'],
+            batch_size=train_config['batch_size'],
+            grid_size=data_config['grid_size'],
+            num_workers=max(1, train_config['num_workers'] // 2),  # Use fewer workers for validation
+            max_replays=val_replays,
+            min_stars=data_config['min_stars'],
+            max_turns=data_config['max_turns'],
+            gamma=gamma,
+            n_step=n_step,
+        )
+        
+        self.val_steps = val_steps
         print(f"Train loader created with {n_step}-step TD targets")
+        print(f"Val loader created with {n_step}-step TD targets, {val_steps} steps per validation")
     
     def setup_optimizer(self):
         opt_config = self.config['optimizer']
@@ -188,6 +208,9 @@ class BehaviorCloningTrainerWithValue:
             'train_loss': [],
             'train_policy_loss': [],
             'train_value_loss': [],
+            'val_loss': [],
+            'val_policy_loss': [],
+            'val_value_loss': [],
             'learning_rate': [],
         }
         
@@ -195,7 +218,7 @@ class BehaviorCloningTrainerWithValue:
         self.early_stopping_enabled = early_stop_config.get('enabled', True)
         self.early_stopping_patience = early_stop_config.get('patience', 10)
         self.early_stopping_min_delta = early_stop_config.get('min_delta', 0.0)
-        self.best_train_loss = float('inf')
+        self.best_val_loss = float('inf')
         self.early_stopping_counter = 0
     
     def compute_policy_loss(self, obs, actions, policy_logits):
@@ -535,8 +558,73 @@ class BehaviorCloningTrainerWithValue:
         
         return total_loss / num_batches, total_policy_loss / num_batches, total_value_loss / num_batches
     
-    def save_checkpoint(self, epoch: int, train_loss: float):
-        ckpt_path = self.ckpt_dir / f"epoch_{epoch}_loss_{train_loss:.4f}.pt"
+    @torch.no_grad()
+    def validate(self):
+        self.model.eval()
+        self.target_model.eval()
+        total_loss = 0.0
+        total_policy_loss = 0.0
+        total_value_loss = 0.0
+        num_batches = 0
+        
+        pbar = tqdm(
+            self.val_loader,
+            desc="Validation",
+            unit="batch",
+            ncols=120,
+            leave=False,
+            total=self.val_steps
+        )
+        
+        for obs, memory, actions, n_step_returns, next_obs, next_memory, dones, _ in pbar:
+            obs = obs.to(self.device)
+            memory = memory.to(self.device)
+            actions = actions.to(self.device)
+            n_step_returns = n_step_returns.to(self.device)
+            next_obs = next_obs.to(self.device)
+            next_memory = next_memory.to(self.device)
+            dones = dones.to(self.device)
+            
+            policy_logits, value_pred = self.model(obs, memory)
+            policy_loss = self.compute_policy_loss(obs, actions, policy_logits)
+            value_loss = self.compute_value_loss(value_pred, next_obs, next_memory, n_step_returns, dones)
+            
+            # Use AWL to combine losses (same as training)
+            loss = self.awl(policy_loss, value_loss)
+            
+            total_loss += loss.item()
+            total_policy_loss += policy_loss.item()
+            total_value_loss += value_loss.item()
+            num_batches += 1
+            
+            if num_batches >= self.val_steps:
+                break
+            
+            avg_loss = total_loss / num_batches
+            avg_policy_loss = total_policy_loss / num_batches
+            avg_value_loss = total_value_loss / num_batches
+            pbar.set_postfix({
+                'loss': f"{avg_loss:.4f}",
+                'policy': f"{avg_policy_loss:.4f}",
+                'value': f"{avg_value_loss:.4f}"
+            })
+        
+        final_avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        final_avg_policy_loss = total_policy_loss / num_batches if num_batches > 0 else 0.0
+        final_avg_value_loss = total_value_loss / num_batches if num_batches > 0 else 0.0
+        
+        if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
+            wandb.log({
+                'val/loss': final_avg_loss,
+                'val/policy_loss': final_avg_policy_loss,
+                'val/value_loss': final_avg_value_loss,
+                'val/step': self.global_step,
+            }, step=self.global_step)
+        
+        return final_avg_loss, final_avg_policy_loss, final_avg_value_loss
+    
+    def save_checkpoint(self, epoch: int, train_loss: float, val_loss: float, val_policy_loss: float):
+        ckpt_path = self.ckpt_dir / f"epoch_{epoch}_loss_{train_loss:.4f}-{val_loss:.4f}-{val_policy_loss:.4f}.pt"
         
         torch.save({
             'epoch': epoch,
@@ -547,10 +635,12 @@ class BehaviorCloningTrainerWithValue:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'train_loss': train_loss,
+            'val_loss': val_loss,
+            'val_policy_loss': val_policy_loss,
             'config': self.config,
         }, ckpt_path)
         
-        self.best_losses.append((train_loss, ckpt_path))
+        self.best_losses.append((val_loss, ckpt_path))
         self.best_losses.sort(key=lambda x: x[0])
         
         if len(self.best_losses) > self.config['training']['save_top_k']:
@@ -581,47 +671,53 @@ class BehaviorCloningTrainerWithValue:
         num_epochs = self.config['training']['num_epochs']
         
         for epoch in range(1, num_epochs + 1):
-            train_loss, policy_loss, value_loss = self.train_epoch(epoch)
+            train_loss, train_policy_loss, train_value_loss = self.train_epoch(epoch)
+            val_loss, val_policy_loss, val_value_loss = self.validate()
             
             self.metrics['train_loss'].append(train_loss)
-            self.metrics['train_policy_loss'].append(policy_loss)
-            self.metrics['train_value_loss'].append(value_loss)
+            self.metrics['train_policy_loss'].append(train_policy_loss)
+            self.metrics['train_value_loss'].append(train_value_loss)
+            self.metrics['val_loss'].append(val_loss)
+            self.metrics['val_policy_loss'].append(val_policy_loss)
+            self.metrics['val_value_loss'].append(val_value_loss)
             self.metrics['learning_rate'].append(self.scheduler.get_last_lr()[0])
             
             print(f"Epoch {epoch:3d}/{num_epochs} | "
-                  f"Loss: {train_loss:.4f} | "
-                  f"Policy: {policy_loss:.4f} | "
-                  f"Value: {value_loss:.4f} | "
+                  f"Train: {train_loss:.4f} (P:{train_policy_loss:.4f} V:{train_value_loss:.4f}) | "
+                  f"Val: {val_loss:.4f} (P:{val_policy_loss:.4f} V:{val_value_loss:.4f}) | "
                   f"LR: {self.scheduler.get_last_lr()[0]:.2e}")
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
                 wandb.log({
                     'epoch': epoch,
                     'epoch/train_loss': train_loss,
-                    'epoch/policy_loss': policy_loss,
-                    'epoch/value_loss': value_loss,
+                    'epoch/train_policy_loss': train_policy_loss,
+                    'epoch/train_value_loss': train_value_loss,
+                    'epoch/val_loss': val_loss,
+                    'epoch/val_policy_loss': val_policy_loss,
+                    'epoch/val_value_loss': val_value_loss,
                     'epoch/learning_rate': self.scheduler.get_last_lr()[0],
                 }, step=self.global_step)
             
-            self.save_checkpoint(epoch, train_loss)
+            self.save_checkpoint(epoch, train_loss, val_loss, val_policy_loss)
             
             with open(self.exp_dir / "metrics.json", 'w') as f:
                 json.dump(self.metrics, f, indent=2)
             
             if self.early_stopping_enabled:
-                if train_loss < self.best_train_loss - self.early_stopping_min_delta:
-                    self.best_train_loss = train_loss
+                if val_loss < self.best_val_loss - self.early_stopping_min_delta:
+                    self.best_val_loss = val_loss
                     self.early_stopping_counter = 0
                 else:
                     self.early_stopping_counter += 1
                     if self.early_stopping_counter >= self.early_stopping_patience:
                         print(f"\nEarly stopping triggered after {epoch} epochs")
-                        print(f"Best training loss: {self.best_train_loss:.4f}")
+                        print(f"Best validation loss: {self.best_val_loss:.4f}")
                         break
         
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
             wandb.log({
-                'best_train_loss': min(self.metrics['train_loss']),
+                'best_val_loss': min(self.metrics['val_loss']),
             })
             wandb.finish()
         
@@ -629,7 +725,7 @@ class BehaviorCloningTrainerWithValue:
         print(" " * 20 + "Training Complete!")
         print("="*60)
         print(f"✓ Best checkpoints saved in: {self.ckpt_dir}")
-        print(f"✓ Best training loss: {min(self.metrics['train_loss']):.4f}")
+        print(f"✓ Best validation loss: {min(self.metrics['val_loss']):.4f}")
         print("="*60 + "\n")
 
 

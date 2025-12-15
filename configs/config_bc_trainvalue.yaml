@@ -3,6 +3,7 @@ training:
   learning_rate: 0.0003
   num_epochs: 100
   steps_per_epoch: 1000
+  val_steps_per_epoch: 200  # Validation steps per epoch (faster than training)
   gradient_clip: 1.0
   warmup_steps: 1000
   weight_decay: 0.0001
