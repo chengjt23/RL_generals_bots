@@ -6,7 +6,7 @@ experiment:
 model:
   grid_size: 24
   obs_channels: 15
-  memory_channels: 18
+  memory_channels: 20  # Must match BC config (was 18)
   base_channels: 64
 
 data:
