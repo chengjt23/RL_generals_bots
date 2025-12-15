@@ -1,12 +1,12 @@
 experiment:
   name: "offline_sac_cql_bc"
-  bc_pretrain_path: "./experiments/epoch_13_loss_1.6560.pt"
+  bc_pretrain_path: "/root/shared-nvme/cjt/experiments/bc_trainvalue_nstep_td_20251215_174316/checkpoints/epoch_28_loss_-0.8559-1.9595-1.9595.pt"
   save_dir: "experiments"
 
 model:
   grid_size: 24
   obs_channels: 15
-  memory_channels: 20  # Must match BC config (was 18)
+  memory_channels: 20
   base_channels: 64
 
 data:
@@ -40,7 +40,7 @@ training:
   critic_lr: 0.00003      # Reduced from 0.0001
   alpha_lr: 0.0001
   
-  log_frequency: 100
+  log_frequency: 10
   save_frequency: 2
 
 logging:
