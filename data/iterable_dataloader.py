@@ -24,12 +24,16 @@ class GeneralsReplayIterableDataset(IterableDataset):
         max_replays: int | None = None,
         min_stars: int = 70,
         max_turns: int = 500,
+        sequence_length: int = 32,
+        skip_replays: int = 0,
     ):
         self.data_dir = Path(data_dir)
         self.grid_size = grid_size
         self.min_stars = min_stars
         self.max_turns = max_turns
         self.max_replays = max_replays
+        self.sequence_length = sequence_length
+        self.skip_replays = skip_replays
         
         try:
             import pyarrow.parquet as pq
@@ -68,7 +72,11 @@ class GeneralsReplayIterableDataset(IterableDataset):
             if self.max_replays is not None:
                 max_replays_per_worker = (self.max_replays + w_num - 1) // w_num
             
+            skip_replays_per_worker = (self.skip_replays + w_num - 1) // w_num
+            
             valid_replay_count = 0
+            skipped_count = 0
+            
             for g in range(start_group, end_group):
                 if max_replays_per_worker is not None and valid_replay_count >= max_replays_per_worker:
                     break
@@ -86,6 +94,10 @@ class GeneralsReplayIterableDataset(IterableDataset):
                     if not self._is_valid_replay(replay):
                         continue
                     
+                    if skipped_count < skip_replays_per_worker:
+                        skipped_count += 1
+                        continue
+                    
                     valid_replay_count += 1
                     
                     for sample in self._extract_samples_from_replay(replay):
@@ -94,13 +106,19 @@ class GeneralsReplayIterableDataset(IterableDataset):
                         action_tensor = torch.from_numpy(action).long()
                         yield obs_tensor, action_tensor, player_idx
         else:
-            per_worker = self.num_replays // w_num
-            start_idx = w_id * per_worker
-            end_idx = start_idx + per_worker
-            if w_id == w_num - 1:
-                end_idx = self.num_replays
+            total_replays = len(self.df)
+            start_replay = self.skip_replays
+            end_replay = total_replays
+            if self.max_replays is not None:
+                end_replay = min(total_replays, start_replay + self.max_replays)
             
-            for idx in range(start_idx, end_idx):
+            num_to_process = max(0, end_replay - start_replay)
+            per_worker = (num_to_process + w_num - 1) // w_num
+            
+            worker_start = start_replay + w_id * per_worker
+            worker_end = min(end_replay, worker_start + per_worker)
+            
+            for idx in range(worker_start, worker_end):
                 replay = self.df.iloc[idx].to_dict()
                 
                 if not self._is_valid_replay(replay):
@@ -132,6 +150,10 @@ class GeneralsReplayIterableDataset(IterableDataset):
         except Exception:
             return
         
+        # Buffers for sequences
+        obs_buffer_0, action_buffer_0 = [], []
+        obs_buffer_1, action_buffer_1 = [], []
+        
         for move in replay['moves']:
             if len(move) < 5:
                 continue
@@ -159,13 +181,15 @@ class GeneralsReplayIterableDataset(IterableDataset):
             
             action = np.array([0, start_row, start_col, direction, is_half], dtype=np.int8)
             
-            # Yield observation and action (no hand-crafted memory)
+            # Collect samples
             if player_idx == 0:
                 obs_tensor = obs_0.as_tensor().astype(np.float32, copy=True)
-                yield (obs_tensor, action.copy(), 0)
+                obs_buffer_0.append(obs_tensor)
+                action_buffer_0.append(action.copy())
             else:
                 obs_tensor = obs_1.as_tensor().astype(np.float32, copy=True)
-                yield (obs_tensor, action.copy(), 1)
+                obs_buffer_1.append(obs_tensor)
+                action_buffer_1.append(action.copy())
             
             actions = {
                 "player_0": np.array([1, 0, 0, 0, 0], dtype=np.int8),
@@ -181,6 +205,18 @@ class GeneralsReplayIterableDataset(IterableDataset):
                 game.step(actions)
             except Exception:
                 break
+        
+        # Yield full episodes
+        for obs_buf, act_buf, pid in [
+            (obs_buffer_0, action_buffer_0, 0),
+            (obs_buffer_1, action_buffer_1, 1)
+        ]:
+            if len(obs_buf) == 0:
+                continue
+                
+            obs_seq = np.stack(obs_buf)
+            act_seq = np.stack(act_buf)
+            yield (obs_seq, act_seq, pid)
     
     def _create_initial_grid(self, replay: Dict, height: int, width: int) -> Grid:
         grid_array = np.full((height, width), '.', dtype='U1')
@@ -222,6 +258,30 @@ class GeneralsReplayIterableDataset(IterableDataset):
         return -1
 
 
+def collate_episode_batch(batch):
+    """
+    Collate function for variable length episodes.
+    Pads sequences to the maximum length in the batch.
+    """
+    # batch is list of (obs_seq, act_seq, pid)
+    # obs_seq: (L, C, H, W)
+    # act_seq: (L, 5)
+    
+    # Sort by length (descending) for efficiency
+    batch.sort(key=lambda x: len(x[0]), reverse=True)
+    
+    obs_seqs, act_seqs, pids = zip(*batch)
+    lengths = torch.tensor([len(x) for x in obs_seqs])
+    
+    # Pad sequences
+    # obs_padded: (B, MaxLen, C, H, W)
+    # act_padded: (B, MaxLen, 5)
+    obs_padded = torch.nn.utils.rnn.pad_sequence(obs_seqs, batch_first=True)
+    act_padded = torch.nn.utils.rnn.pad_sequence(act_seqs, batch_first=True)
+    
+    return obs_padded, act_padded, lengths
+
+
 def create_iterable_dataloader(
     data_dir: str,
     batch_size: int = 32,
@@ -230,6 +290,8 @@ def create_iterable_dataloader(
     max_replays: int | None = None,
     min_stars: int = 70,
     max_turns: int = 500,
+    sequence_length: int = 32,
+    skip_replays: int = 0,
 ) -> DataLoader:
     dataset = GeneralsReplayIterableDataset(
         data_dir=data_dir,
@@ -237,6 +299,8 @@ def create_iterable_dataloader(
         max_replays=max_replays,
         min_stars=min_stars,
         max_turns=max_turns,
+        sequence_length=sequence_length,
+        skip_replays=skip_replays,
     )
     
     return DataLoader(
@@ -244,5 +308,6 @@ def create_iterable_dataloader(
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=True,
+        collate_fn=collate_episode_batch,
     )
 

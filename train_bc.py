@@ -116,26 +116,23 @@ class BehaviorCloningTrainer:
             max_replays=train_replays,
             min_stars=data_config['min_stars'],
             max_turns=data_config['max_turns'],
+            sequence_length=train_config.get('sequence_length', 32),
         )
         
-        val_dataset = GeneralsReplayDataset(
+        self.val_loader = create_iterable_dataloader(
             data_dir=data_config['data_dir'],
+            batch_size=train_config['batch_size'],
             grid_size=data_config['grid_size'],
+            num_workers=train_config['num_workers'],
             max_replays=val_replays,
             min_stars=data_config['min_stars'],
             max_turns=data_config['max_turns'],
-        )
-        
-        self.val_loader = torch.utils.data.DataLoader(
-            val_dataset,
-            batch_size=train_config['batch_size'],
-            shuffle=False,
-            num_workers=train_config['num_workers'],
-            pin_memory=True,
+            sequence_length=train_config.get('sequence_length', 32),
+            skip_replays=train_replays,
         )
         
         print(f"Train replays (streaming): {train_replays}")
-        print(f"Val samples: {len(val_dataset)}")
+        print(f"Val replays (streaming): {val_replays}")
     
     def setup_optimizer(self):
         opt_config = self.config['optimizer']
@@ -224,9 +221,9 @@ class BehaviorCloningTrainer:
             losses.append(loss)
         
         if len(losses) == 0:
-            return torch.tensor(0.0, device=self.device)
+            return torch.zeros(batch_size, device=self.device)
         
-        return torch.stack(losses).mean()
+        return torch.stack(losses)
     
     def train_epoch(self, epoch: int):
         self.model.train()
@@ -241,23 +238,62 @@ class BehaviorCloningTrainer:
             total=self.steps_per_epoch
         )
         
-        for batch_idx, (obs, actions, _) in enumerate(pbar):
-            obs = obs.to(self.device)
-            actions = actions.to(self.device)
+        for batch_idx, (obs_seq, actions_seq, lengths) in enumerate(pbar):
+            # obs_seq: (B, L, C, H, W)
+            # actions_seq: (B, L, 5)
+            # lengths: (B,)
+            obs_seq = obs_seq.to(self.device)
+            actions_seq = actions_seq.to(self.device)
+            lengths = lengths.to(self.device)
+            
+            batch_size, seq_len = obs_seq.shape[:2]
             
             self.optimizer.zero_grad()
             
-            # Note: RNN hidden states are handled automatically by the network.
-            # For batch training, each sample in the batch is treated independently
-            # (no hidden state carry-over between samples). The RNN learns to encode
-            # memory from observations within each training step.
+            # Initialize hidden state for the batch
+            hidden_state = None
+            batch_loss = 0.0
+            total_valid_steps = 0
+            
+            # Unroll RNN loop
+            for t in range(seq_len):
+                # Mask for valid steps at time t
+                mask = (t < lengths).float()
+                if mask.sum() == 0:
+                    break
+                
+                obs_t = obs_seq[:, t]
+                actions_t = actions_seq[:, t]
+                
+                if self.scaler is not None:
+                    with autocast():
+                        # Pass hidden state and get updated one
+                        policy_logits, _, hidden_state = self.model(
+                            obs_t, 
+                            hidden_state=hidden_state, 
+                            return_hidden=True
+                        )
+                        loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
+                        # loss_t is (B,)
+                        loss_t = (loss_t * mask).sum()
+                        batch_loss += loss_t
+                else:
+                    policy_logits, _, hidden_state = self.model(
+                        obs_t, 
+                        hidden_state=hidden_state, 
+                        return_hidden=True
+                    )
+                    loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
+                    loss_t = (loss_t * mask).sum()
+                    batch_loss += loss_t
+                
+                total_valid_steps += mask.sum()
+            
+            # Average loss over all valid steps in the batch
+            batch_loss = batch_loss / (total_valid_steps + 1e-8)
             
             if self.scaler is not None:
-                with autocast():
-                    policy_logits, _ = self.model(obs, hidden_state=None, return_hidden=False)
-                    loss = self.compute_loss(obs, actions, policy_logits)
-                
-                self.scaler.scale(loss).backward()
+                self.scaler.scale(batch_loss).backward()
                 self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
@@ -266,9 +302,7 @@ class BehaviorCloningTrainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                policy_logits, _ = self.model(obs, hidden_state=None, return_hidden=False)
-                loss = self.compute_loss(obs, actions, policy_logits)
-                loss.backward()
+                batch_loss.backward()
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config['training']['gradient_clip']
@@ -277,7 +311,7 @@ class BehaviorCloningTrainer:
             
             self.scheduler.step()
             
-            total_loss += loss.item()
+            total_loss += batch_loss.item()
             num_batches += 1
             
             if num_batches >= self.steps_per_epoch:
@@ -285,13 +319,14 @@ class BehaviorCloningTrainer:
             
             avg_loss = total_loss / num_batches
             pbar.set_postfix({
-                'loss': f"{loss.item():.4f}",
+                'loss': f"{batch_loss.item():.4f}",
                 'avg_loss': f"{avg_loss:.4f}",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
                 wandb.log({
+                    'train/loss': batch_
                     'train/loss': loss.item(),
                     'train/avg_loss': avg_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
@@ -316,20 +351,46 @@ class BehaviorCloningTrainer:
             leave=False
         )
         
-        for obs, actions, _ in pbar:
-            obs = obs.to(self.device)
-            actions = actions.to(self.device)
+        for obs_seq, actions_seq, lengths in pbar:
+            obs_seq = obs_seq.to(self.device)
+            actions_seq = actions_seq.to(self.device)
+            lengths = lengths.to(self.device)
             
-            # RNN handles memory encoding internally
-            policy_logits, _ = self.model(obs, hidden_state=None, return_hidden=False)
-            loss = self.compute_loss(obs, actions, policy_logits)
+            batch_size, seq_len = obs_seq.shape[:2]
             
-            total_loss += loss.item()
+            hidden_state = None
+            batch_loss = 0.0
+            total_valid_steps = 0
+            
+            for t in range(seq_len):
+                mask = (t < lengths).float()
+                if mask.sum() == 0:
+                    break
+                
+                obs_t = obs_seq[:, t]
+                actions_t = actions_seq[:, t]
+                
+                policy_logits, _, hidden_state = self.model(
+                    obs_t, 
+                    hidden_state=hidden_state, 
+                    return_hidden=True
+                )
+                loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
+                loss_t = (loss_t * mask).sum()
+                batch_loss += loss_t
+                total_valid_steps += mask.sum()
+            
+            batch_loss = batch_loss / (total_valid_steps + 1e-8)
+            
+            total_loss += batch_loss.item()
             num_batches += 1
             
             avg_loss = total_loss / num_batches
             pbar.set_postfix({'val_loss': f"{avg_loss:.4f}"})
         
+        if num_batches == 0:
+            return 0.0
+            
         final_avg_loss = total_loss / num_batches
         
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):

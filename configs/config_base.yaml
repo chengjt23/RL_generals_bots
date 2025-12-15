@@ -1,5 +1,6 @@
 training:
-  batch_size: 1024
+  batch_size: 32  # Reduced batch size for sequences
+  sequence_length: 32  # Length of sequences for RNN training
   learning_rate: 0.0003
   num_epochs: 100
   steps_per_epoch: 1000
