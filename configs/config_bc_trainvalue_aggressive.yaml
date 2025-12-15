@@ -1,0 +1,63 @@
+# Aggressive config - 更快的训练，value learning更强
+training:
+  batch_size: 2048         # 更大batch
+  learning_rate: 0.0005    # 更高学习率
+  num_epochs: 100
+  steps_per_epoch: 1000
+  gradient_clip: 1.0
+  warmup_steps: 500        # 较短warm up
+  weight_decay: 0.0001
+  
+  # N-step TD parameters (aggressive settings)
+  n_step: 50               # 更长的n，减少偏差
+  gamma: 0.995             # 更高的gamma，更重视长期奖励
+  tau: 0.01                # 更快的target network更新
+  value_weight: 0.7        # 更高的value权重
+  
+  save_top_k: 5
+  eval_every: 1000
+  log_every: 100
+  
+  device: cuda
+  num_workers: 8           # 更多workers
+  mixed_precision: true
+
+  early_stopping:
+    enabled: true
+    patience: 8
+    min_delta: 0.0
+
+data:
+  data_dir: data/generals_io_replays
+  grid_size: 24
+  min_stars: 70
+  max_turns: 500
+  max_replays: 18803
+  train_split: 0.95
+
+model:
+  obs_channels: 15
+  memory_channels: 20
+  base_channels: 64
+  grid_size: 24
+
+optimizer:
+  type: adamw
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  type: cosine
+  warmup_epochs: 3
+  min_lr: 1.0e-6
+
+logging:
+  experiment_name: bc_trainvalue_aggressive
+  save_dir: experiments
+  tensorboard: true
+  use_wandb: true
+  wandb_project: generals-rl
+  wandb_tags: [behavior_cloning, value_head, nstep_td, aggressive]
+
+seed: 42
+

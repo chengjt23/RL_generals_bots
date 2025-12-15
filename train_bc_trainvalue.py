@@ -441,7 +441,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='/root/oyx_fork/configs/config_base.yaml',
+        default='configs/config_bc_trainvalue.yaml',
         help='Path to config file'
     )
     args = parser.parse_args()
