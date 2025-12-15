@@ -250,11 +250,29 @@ class BehaviorCloningTrainerWithValue:
         Using Huber loss for robustness to outliers
         """
         with torch.no_grad():
+            # Safety check: Clean NaN/Inf in inputs
+            if torch.isnan(next_obs).any() or torch.isinf(next_obs).any():
+                next_obs = torch.nan_to_num(next_obs, nan=0.0, posinf=1.0, neginf=-1.0)
+            if torch.isnan(next_memory).any() or torch.isinf(next_memory).any():
+                next_memory = torch.nan_to_num(next_memory, nan=0.0, posinf=1.0, neginf=-1.0)
+            
+            # Compute next value estimates
             _, next_value = self.target_model(next_obs, next_memory)
             next_value = next_value.squeeze(-1)
             
+            # Physical cleaning: Replace NaN/Inf with 0
+            next_value = torch.nan_to_num(next_value, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # Logical cleaning: Force next_value to 0 for done states
+            # This is critical: even if next_obs is corrupted, done states should have value 0
+            done_mask = done > 0.5
+            next_value[done_mask] = 0.0
+            
             # Compute n-step TD target
             td_target = n_step_return + (self.gamma ** self.n_step) * next_value * (1.0 - done)
+            
+            # Safety check: Clean any remaining NaN in target (shouldn't happen, but just in case)
+            td_target = torch.nan_to_num(td_target, nan=0.0, posinf=self.value_clip if self.value_clip else 10.0, neginf=-self.value_clip if self.value_clip else -10.0)
             
             # Clip target values if value_clip is specified
             if self.value_clip is not None:
@@ -312,6 +330,14 @@ class BehaviorCloningTrainerWithValue:
                       f"Max: {td_target_unclipped.max().item():.4f}")
                 print(f"Clipped values: {(td_target_unclipped.abs() > self.value_clip).sum().item()} / {td_target.numel()}")
             
+            print("\n--- Next Observations ---")
+            print(f"Next Obs - Has NaN: {torch.isnan(next_obs).any().item()}")
+            print(f"Next Obs - Has Inf: {torch.isinf(next_obs).any().item()}")
+            print(f"Next Obs - Zero count: {(next_obs == 0).all(dim=(1,2,3)).sum().item()} / {next_obs.shape[0]}")
+            print(f"Next Memory - Has NaN: {torch.isnan(next_memory).any().item()}")
+            print(f"Next Memory - Has Inf: {torch.isinf(next_memory).any().item()}")
+            print(f"Next Memory - Zero count: {(next_memory == 0).all(dim=(1,2,3)).sum().item()} / {next_memory.shape[0]}")
+            
             print("\n--- Next Value Estimates ---")
             print(f"Next Value - Mean: {next_value.mean().item():.4f}, "
                   f"Std: {next_value.std().item():.4f}")
@@ -346,6 +372,12 @@ class BehaviorCloningTrainerWithValue:
             inf_params = sum(1 for p in self.model.parameters() if torch.isinf(p).any())
             print(f"Parameters with NaN: {nan_params}")
             print(f"Parameters with Inf: {inf_params}")
+            
+            print("\n--- Target Network Parameters Check ---")
+            target_nan_params = sum(1 for p in self.target_model.parameters() if torch.isnan(p).any())
+            target_inf_params = sum(1 for p in self.target_model.parameters() if torch.isinf(p).any())
+            print(f"Target Parameters with NaN: {target_nan_params}")
+            print(f"Target Parameters with Inf: {target_inf_params}")
             
         print("="*80)
         print("Training will continue, but you should investigate the cause!")
