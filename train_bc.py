@@ -64,6 +64,7 @@ class BehaviorCloningTrainer:
             grid_size=model_config['grid_size'],
             base_channels=model_config['base_channels'],
             rnn_hidden_channels=model_config.get('rnn_hidden_channels', 32),
+            rnn_encoded_channels=model_config.get('rnn_encoded_channels', 10),
             rnn_num_layers=model_config.get('rnn_num_layers', 2),
             use_rnn_memory=model_config.get('use_rnn_memory', True),
         ).to(self.device)
@@ -180,6 +181,18 @@ class BehaviorCloningTrainer:
         self.best_val_loss = float('inf')
         self.early_stopping_counter = 0
     
+    def extract_visibility_mask(self, obs: torch.Tensor) -> torch.Tensor:
+        """Extract visibility mask from observation channels.
+        
+        Assumes channel 0 is visibility/fog (1=visible, 0=fog).
+        If not available, returns None.
+        """
+        # Channel 0 typically contains visibility information
+        # Values > 0 mean visible, 0 means fog
+        visibility = obs[:, 0:1, :, :]  # (B, 1, H, W)
+        mask = (visibility > 0).float()
+        return mask
+    
     def compute_loss(self, obs, actions, policy_logits):
         batch_size = obs.shape[0]
         grid_size = self.config['model']['grid_size']
@@ -266,7 +279,7 @@ class BehaviorCloningTrainer:
                 chunk_loss = 0.0
                 valid_steps_in_chunk = 0
                 
-                # Process chunk
+                # Process chunk timesteps (still need loop for hidden state passing)
                 for t in range(t_start, t_end):
                     mask = (t < lengths).float()
                     if mask.sum() == 0:
@@ -275,11 +288,15 @@ class BehaviorCloningTrainer:
                     obs_t = obs_seq[:, t]
                     actions_t = actions_seq[:, t]
                     
+                    # Extract visibility mask
+                    vis_mask = self.extract_visibility_mask(obs_t)
+                    
                     if self.scaler is not None:
                         with autocast():
                             policy_logits, _, hidden_state = self.model(
-                                obs_t, 
-                                hidden_state=hidden_state, 
+                                obs_t,
+                                hidden_state=hidden_state,
+                                visibility_mask=vis_mask,
                                 return_hidden=True
                             )
                             loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
@@ -287,8 +304,9 @@ class BehaviorCloningTrainer:
                             chunk_loss += loss_t
                     else:
                         policy_logits, _, hidden_state = self.model(
-                            obs_t, 
-                            hidden_state=hidden_state, 
+                            obs_t,
+                            hidden_state=hidden_state,
+                            visibility_mask=vis_mask,
                             return_hidden=True
                         )
                         loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
@@ -398,9 +416,13 @@ class BehaviorCloningTrainer:
                     obs_t = obs_seq[:, t]
                     actions_t = actions_seq[:, t]
                     
+                    # Extract visibility mask
+                    vis_mask = self.extract_visibility_mask(obs_t)
+                    
                     policy_logits, _, hidden_state = self.model(
-                        obs_t, 
-                        hidden_state=hidden_state, 
+                        obs_t,
+                        hidden_state=hidden_state,
+                        visibility_mask=vis_mask,
                         return_hidden=True
                     )
                     loss_t = self.compute_loss(obs_t, actions_t, policy_logits)

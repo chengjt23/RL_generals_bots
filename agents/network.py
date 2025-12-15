@@ -168,20 +168,22 @@ class SOTANetwork(nn.Module):
     def __init__(
         self,
         obs_channels: int = 15,
-        memory_channels: int = 16,
+        memory_channels: int = 6,
         grid_size: int = 24,
         base_channels: int = 64,
         rnn_hidden_channels: int = 32,
+        rnn_encoded_channels: int = 10,
         rnn_num_layers: int = 2,
         use_rnn_memory: bool = True
     ):
         """
         Args:
             obs_channels: Number of observation channels
-            memory_channels: Number of memory channels output by RNN
+            memory_channels: Number of memory channels output by RNN (4-8 recommended)
             grid_size: Size of the game grid
             base_channels: Base channels for U-Net
             rnn_hidden_channels: Hidden channels in RNN layers
+            rnn_encoded_channels: Encoded observation channels for RNN (8-12 recommended)
             rnn_num_layers: Number of RNN layers
             use_rnn_memory: If True, use RNN encoder; if False, use zero memory (for backward compatibility)
         """
@@ -191,10 +193,11 @@ class SOTANetwork(nn.Module):
         self.grid_size = grid_size
         self.use_rnn_memory = use_rnn_memory
         
-        # RNN memory encoder
+        # RNN memory encoder with improved architecture
         if use_rnn_memory:
             self.memory_encoder = RNNMemoryEncoder(
                 obs_channels=obs_channels,
+                encoded_channels=rnn_encoded_channels,
                 hidden_channels=rnn_hidden_channels,
                 memory_channels=memory_channels,
                 num_layers=rnn_num_layers
@@ -202,9 +205,15 @@ class SOTANetwork(nn.Module):
         else:
             self.memory_encoder = None
         
-        # U-Net backbone processes concatenated obs + memory
-        total_channels = obs_channels + memory_channels
-        self.backbone = UNetBackbone(total_channels, base_channels)
+        # U-Net backbone processes only observations (late fusion)
+        self.backbone = UNetBackbone(obs_channels, base_channels)
+        
+        # Memory projection for late fusion
+        self.memory_proj = nn.Sequential(
+            nn.Conv2d(memory_channels, base_channels, 3, padding=1),
+            nn.BatchNorm2d(base_channels),
+            nn.ReLU()
+        )
         
         # Policy and value heads
         self.policy_head = PolicyHead(base_channels, grid_size)
@@ -214,16 +223,19 @@ class SOTANetwork(nn.Module):
         self,
         obs: torch.Tensor,
         hidden_state: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
+        visibility_mask: torch.Tensor | None = None,
         return_hidden: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, list[tuple[torch.Tensor, torch.Tensor]]]:
         """
-        Forward pass with RNN memory encoding.
+        Forward pass with RNN memory encoding and late fusion.
         
         Args:
             obs: Observation tensor (batch, obs_channels, height, width)
             hidden_state: RNN hidden state from previous timestep.
                          List of (h, c) tuples for each LSTM layer.
                          If None, will be initialized with zeros.
+            visibility_mask: Binary mask (batch, 1, height, width) where 1=visible, 0=fog.
+                           Used to preserve memory on hidden tiles.
             return_hidden: If True, returns updated hidden state as third output
         
         Returns:
@@ -234,26 +246,22 @@ class SOTANetwork(nn.Module):
         batch_size = obs.shape[0]
         height, width = obs.shape[2], obs.shape[3]
         
+        # Process observations through U-Net backbone
+        obs_features = self.backbone(obs)
+        
         if self.use_rnn_memory and self.memory_encoder is not None:
-            # Generate memory representation using RNN
-            memory, hidden_state_next = self.memory_encoder(obs, hidden_state)
-        else:
-            # Fallback: use zero memory (for backward compatibility or when RNN disabled)
-            memory = torch.zeros(
-                batch_size,
-                self.memory_channels,
-                height,
-                width,
-                device=obs.device,
-                dtype=obs.dtype
+            # Generate memory representation using RNN with visibility gating
+            memory, hidden_state_next = self.memory_encoder(
+                obs, hidden_state, visibility_mask
             )
+            
+            # Late fusion: project memory and combine with observation features
+            mem_features = self.memory_proj(memory)
+            features = obs_features + mem_features
+        else:
+            # Fallback: use only observation features
+            features = obs_features
             hidden_state_next = None
-        
-        # Concatenate observation and memory
-        x = torch.cat([obs, memory], dim=1)
-        
-        # Process through U-Net backbone
-        features = self.backbone(x)
         
         # Generate policy and value outputs
         policy_logits = self.policy_head(features)
