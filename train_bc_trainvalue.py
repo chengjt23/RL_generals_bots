@@ -13,6 +13,7 @@ import json
 from data.dataloader import GeneralsReplayDataset
 from data.iterable_dataloader_trainvalue import create_iterable_dataloader_with_value
 from agents.network_trainvalue import SOTANetworkWithValue
+from agents.automatic_weighted_loss import AutomaticWeightedLoss
 
 try:
     import wandb
@@ -77,10 +78,15 @@ class BehaviorCloningTrainerWithValue:
         self.target_model.load_state_dict(self.model.state_dict())
         self.target_model.eval()
         
+        # Initialize Automatic Weighted Loss (Kendall & Gal, 2018)
+        # 0: Policy Loss, 1: Value Loss
+        self.awl = AutomaticWeightedLoss(num_losses=2).to(self.device)
+        
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"Total parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
+        print(f"AWL parameters: {sum(p.numel() for p in self.awl.parameters())}")
     
     def setup_wandb(self):
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
@@ -132,8 +138,13 @@ class BehaviorCloningTrainerWithValue:
     
     def setup_optimizer(self):
         opt_config = self.config['optimizer']
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+        
+        # Create optimizer with separate parameter groups
+        # AWL parameters must have weight_decay=0 to prevent forcing weights back to 0.5
+        self.optimizer = torch.optim.AdamW([
+            {'params': self.model.parameters()},
+            {'params': self.awl.parameters(), 'weight_decay': 0.0}
+        ],
             lr=self.config['training']['learning_rate'],
             betas=opt_config['betas'],
             eps=opt_config['eps'],
@@ -284,7 +295,9 @@ class BehaviorCloningTrainerWithValue:
                     policy_logits, value_pred = self.model(obs, memory)
                     policy_loss = self.compute_policy_loss(obs, actions, policy_logits)
                     value_loss = self.compute_value_loss(value_pred, next_obs, next_memory, n_step_returns, dones)
-                    loss = policy_loss + self.value_weight * value_loss
+                    
+                    # Use Automatic Weighted Loss (Kendall & Gal, 2018)
+                    loss = self.awl(policy_loss, value_loss)
                 
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optimizer)
@@ -298,7 +311,10 @@ class BehaviorCloningTrainerWithValue:
                 policy_logits, value_pred = self.model(obs, memory)
                 policy_loss = self.compute_policy_loss(obs, actions, policy_logits)
                 value_loss = self.compute_value_loss(value_pred, next_obs, next_memory, n_step_returns, dones)
-                loss = policy_loss + self.value_weight * value_loss
+                
+                # Use Automatic Weighted Loss (Kendall & Gal, 2018)
+                loss = self.awl(policy_loss, value_loss)
+                
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
@@ -322,10 +338,19 @@ class BehaviorCloningTrainerWithValue:
             avg_loss = total_loss / num_batches
             avg_policy_loss = total_policy_loss / num_batches
             avg_value_loss = total_value_loss / num_batches
+            
+            # Compute actual weights from AWL parameters
+            with torch.no_grad():
+                s_policy = self.awl.params[0]
+                s_value = self.awl.params[1]
+                weight_policy = 0.5 * torch.exp(-s_policy)
+                weight_value = 0.5 * torch.exp(-s_value)
+            
             pbar.set_postfix({
                 'loss': f"{loss.item():.4f}",
                 'policy': f"{policy_loss.item():.4f}",
                 'value': f"{value_loss.item():.4f}",
+                'w_val': f"{weight_value.item():.3f}",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
             
@@ -339,6 +364,12 @@ class BehaviorCloningTrainerWithValue:
                     'train/avg_value_loss': avg_value_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
                     'train/step': self.global_step,
+                    
+                    # AWL monitoring
+                    'meta/weight_policy': weight_policy.item(),
+                    'meta/weight_value': weight_value.item(),
+                    'meta/sigma_policy': torch.exp(0.5 * s_policy).item(),
+                    'meta/sigma_value': torch.exp(0.5 * s_value).item(),
                 }, step=self.global_step)
             
             self.global_step += 1
@@ -353,6 +384,7 @@ class BehaviorCloningTrainerWithValue:
             'global_step': self.global_step,
             'model_state_dict': self.model.state_dict(),
             'target_model_state_dict': self.target_model.state_dict(),
+            'awl_state_dict': self.awl.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'train_loss': train_loss,
@@ -379,7 +411,7 @@ class BehaviorCloningTrainerWithValue:
         print(f"Steps per epoch: {self.steps_per_epoch}")
         print(f"Batch size: {self.config['training']['batch_size']}")
         print(f"Learning rate: {self.config['training']['learning_rate']}")
-        print(f"Value weight: {self.value_weight}")
+        print(f"Loss weighting: Automatic (Kendall & Gal, 2018)")
         print(f"N-step: {self.n_step}, Gamma: {self.gamma}, Tau: {self.tau}, Value clip: {self.value_clip}")
         if self.early_stopping_enabled:
             print(f"Early stopping: enabled (patience={self.early_stopping_patience}, min_delta={self.early_stopping_min_delta})")
