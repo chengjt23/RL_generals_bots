@@ -167,6 +167,7 @@ class BehaviorCloningTrainerWithValue:
         self.tau = self.config['training'].get('tau', 0.005)  # Soft update coefficient
         self.gamma = self.config['training'].get('gamma', 0.99)
         self.n_step = self.config['training'].get('n_step', 50)
+        self.value_clip = self.config['training'].get('value_clip', None)  # Value clipping
         
         self.metrics = {
             'train_loss': [],
@@ -238,6 +239,10 @@ class BehaviorCloningTrainerWithValue:
             
             # Compute n-step TD target
             td_target = n_step_return + (self.gamma ** self.n_step) * next_value * (1.0 - done)
+            
+            # Clip target values if value_clip is specified
+            if self.value_clip is not None:
+                td_target = torch.clamp(td_target, min=-self.value_clip, max=self.value_clip)
         
         value_pred = value_pred.squeeze(-1)
         return F.mse_loss(value_pred, td_target)
@@ -374,7 +379,7 @@ class BehaviorCloningTrainerWithValue:
         print(f"Batch size: {self.config['training']['batch_size']}")
         print(f"Learning rate: {self.config['training']['learning_rate']}")
         print(f"Value weight: {self.value_weight}")
-        print(f"N-step: {self.n_step}, Gamma: {self.gamma}, Tau: {self.tau}")
+        print(f"N-step: {self.n_step}, Gamma: {self.gamma}, Tau: {self.tau}, Value clip: {self.value_clip}")
         if self.early_stopping_enabled:
             print(f"Early stopping: enabled (patience={self.early_stopping_patience}, min_delta={self.early_stopping_min_delta})")
         else:
