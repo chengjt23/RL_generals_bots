@@ -267,17 +267,31 @@ class BehaviorCloningTrainer:
             
             batch_size, seq_len = obs_seq.shape[:2]
             
+            # Limit sequence length for training efficiency
+            max_seq_len = self.config['training'].get('max_sequence_length', None)
+            if max_seq_len is not None and seq_len > max_seq_len:
+                # Sample random window from episode (better than just truncating)
+                max_start = seq_len - max_seq_len
+                start_idx = torch.randint(0, max(1, max_start), (1,)).item()
+                end_idx = start_idx + max_seq_len
+                
+                obs_seq = obs_seq[:, start_idx:end_idx]
+                actions_seq = actions_seq[:, start_idx:end_idx]
+                lengths = torch.clamp(lengths - start_idx, min=0, max=max_seq_len)
+                seq_len = max_seq_len
+            
             # Initialize hidden state for the batch
             hidden_state = None
             
             # Truncated Backpropagation Through Time (TBPTT)
             tbptt_steps = self.config['training'].get('tbptt_steps', 32)
             
-            batch_total_loss = 0.0
-            batch_num_chunks = 0
+            total_loss_for_logging = 0.0
+            num_chunks = 0
             
             use_amp = self.scaler is not None
             
+            # Standard TBPTT: process chunks, backward, and step after each chunk
             for t_start in range(0, seq_len, tbptt_steps):
                 t_end = min(t_start + tbptt_steps, seq_len)
                 
@@ -288,9 +302,9 @@ class BehaviorCloningTrainer:
                 self.optimizer.zero_grad()
                 
                 chunk_loss = 0.0
-                valid_steps_in_chunk = 0
+                chunk_valid_steps = 0
                 
-                # Process chunk timesteps (still need loop for hidden state passing)
+                # Process timesteps in this chunk
                 for t in range(t_start, t_end):
                     mask = (t < lengths).float()
                     if mask.sum() == 0:
@@ -298,11 +312,8 @@ class BehaviorCloningTrainer:
                     
                     obs_t = obs_seq[:, t]
                     actions_t = actions_seq[:, t]
-                    
-                    # Extract visibility mask
                     vis_mask = self.extract_visibility_mask(obs_t)
                     
-                    # Forward pass with mixed precision if enabled
                     with autocast(enabled=use_amp):
                         policy_logits, _, hidden_state = self.model(
                             obs_t,
@@ -310,15 +321,13 @@ class BehaviorCloningTrainer:
                             visibility_mask=vis_mask,
                             return_hidden=True
                         )
-                        loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
-                        loss_t = (loss_t * mask).sum()
-                        chunk_loss += loss_t
-                    
-                    valid_steps_in_chunk += mask.sum()
+                        loss_per_sample = self.compute_loss(obs_t, actions_t, policy_logits)
+                        chunk_loss += (loss_per_sample * mask).sum()
+                        chunk_valid_steps += mask.sum()
                 
-                # Optimize per chunk to avoid gradient accumulation issues
-                if valid_steps_in_chunk > 0:
-                    chunk_loss = chunk_loss / valid_steps_in_chunk
+                # Backward and step for this chunk (standard TBPTT)
+                if chunk_valid_steps > 0:
+                    chunk_loss = chunk_loss / chunk_valid_steps
                     
                     if use_amp:
                         self.scaler.scale(chunk_loss).backward()
@@ -337,16 +346,18 @@ class BehaviorCloningTrainer:
                         )
                         self.optimizer.step()
                     
-                    # Detach hidden state for next chunk
+                    # Detach hidden state for next chunk (stop gradients)
                     if hidden_state is not None:
                         hidden_state = [(h.detach(), c.detach()) for h, c in hidden_state]
                     
-                    batch_total_loss += chunk_loss.item()
-                    batch_num_chunks += 1
+                    total_loss_for_logging += chunk_loss.item()
+                    num_chunks += 1
             
-            if batch_num_chunks > 0:
-                avg_batch_loss = batch_total_loss / batch_num_chunks
-                total_loss += avg_batch_loss
+            # Average loss across all chunks for logging
+            batch_loss = total_loss_for_logging / num_chunks if num_chunks > 0 else 0.0
+            
+            if num_chunks > 0:
+                total_loss += batch_loss
             
             self.scheduler.step()
             num_batches += 1
@@ -356,14 +367,14 @@ class BehaviorCloningTrainer:
             
             avg_loss = total_loss / num_batches
             pbar.set_postfix({
-                'loss': f"{avg_batch_loss:.4f}" if batch_num_chunks > 0 else "0.0000",
+                'loss': f"{batch_loss:.4f}",
                 'avg_loss': f"{avg_loss:.4f}",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
             
-            if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False) and batch_num_chunks > 0:
+            if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
                 wandb.log({
-                    'train/loss': avg_batch_loss,
+                    'train/loss': batch_loss,
                     'train/avg_loss': avg_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
                     'train/step': self.global_step,
