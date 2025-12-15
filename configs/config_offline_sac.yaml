@@ -1,6 +1,6 @@
 experiment:
   name: "offline_sac"
-  bc_pretrain_path: "./experiments/epoch_12_loss_1.6968.pt"
+  bc_pretrain_path: "./experiments/epoch_13_loss_1.6560.pt"
   save_dir: "experiments"
 
 model:
@@ -24,11 +24,11 @@ training:
   alpha: 0.2
   auto_tune_alpha: true
   
-  epochs: 10
+  epochs: 20
   batch_size: 128
   steps_per_epoch: 3000
   
-  actor_lr: 0.0001
+  actor_lr: 0.00003
   critic_lr: 0.0001
   alpha_lr: 0.0001
   

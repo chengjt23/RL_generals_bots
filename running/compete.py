@@ -6,6 +6,7 @@ import argparse
 import torch
 import yaml
 from pathlib import Path
+from tqdm import tqdm
 from agents.sac_agent import SACAgent
 from agents.sota_agent import SOTAAgent
 from generals.envs import PettingZooGenerals
@@ -19,7 +20,7 @@ except ImportError:
     print("Warning: pygame or PIL not available, GIF recording disabled")
 
 
-def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbose: bool = False, save_gif: bool = False, gif_path: str = "first_game.gif"):
+def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbose: bool = False, save_gif: bool = False, gif_path: str = "first_game.gif", max_steps: int = 1000):
     print("\n" + "="*70)
     print("SAC Agent vs BC Model Competition")
     print("="*70)
@@ -90,7 +91,11 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
         
         recording = save_gif and game_num == 0
         
-        while not (terminated or truncated):
+        pbar = tqdm(total=max_steps, desc=f"Game {game_num + 1}/{num_games}", 
+                   leave=False, disable=(not verbose and (game_num + 1) % 10 != 0))
+        
+        while not (terminated or truncated) and step < max_steps:
+            # print(step)
             sac_action = sac_agent.act(obs_dict["SAC"], deterministic=True)
             bc_action = bc_agent.act(obs_dict["BC"])
             actions_dict = {"SAC": sac_action, "BC": bc_action}
@@ -99,6 +104,12 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
             sac_episode_reward += rewards_dict["SAC"]
             bc_episode_reward += rewards_dict["BC"]
             step += 1
+            
+            pbar.update(1)
+            pbar.set_postfix({
+                'SAC_r': f'{sac_episode_reward:.1f}',
+                'BC_r': f'{bc_episode_reward:.1f}'
+            })
             
             if recording:
                 env.render()
@@ -112,6 +123,8 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
                     if step == 1:
                         print("Warning: Could not capture frames for GIF")
                     recording = False
+        
+        pbar.close()
         
         game_lengths.append(step)
         sac_rewards.append(sac_episode_reward)
@@ -203,6 +216,8 @@ if __name__ == '__main__':
                        help='Path to BC model file')
     parser.add_argument('--num_games', type=int, default=100,
                        help='Number of games to play (default: 100)')
+    parser.add_argument('--max_steps', type=int, default=1000,
+                       help='Maximum steps per game (default: 1000)')
     parser.add_argument('--verbose', action='store_true',
                        help='Print result for every game')
     parser.add_argument('--save_gif', action='store_true',
@@ -217,6 +232,7 @@ if __name__ == '__main__':
         num_games=args.num_games,
         verbose=args.verbose,
         save_gif=args.save_gif,
-        gif_path=args.gif_path
+        gif_path=args.gif_path,
+        max_steps=args.max_steps
     )
 
