@@ -73,6 +73,12 @@ class BehaviorCloningTrainer:
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"Total parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
+        
+        # Compile model with PyTorch 2.0+ for speedup (disable if causing issues)
+        if hasattr(torch, 'compile') and self.config['training'].get('compile_model', False):
+            print("Compiling model with torch.compile (first batches will be slow)...")
+            self.model = torch.compile(self.model, mode='reduce-overhead')
+            print("Model compilation scheduled (will compile on first forward pass)")
     
     def setup_wandb(self):
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
@@ -81,6 +87,7 @@ class BehaviorCloningTrainer:
             
             wandb.init(
                 project=self.config['logging'].get('wandb_project', 'generals-rl'),
+                entity='chengyon23-',
                 name=f"{exp_name}_{timestamp}",
                 config=self.config,
                 dir=str(self.exp_dir),
@@ -208,35 +215,34 @@ class BehaviorCloningTrainer:
         pass_logits = policy_logits_reshaped[:, 0, 0, 0]
         action_logits = policy_logits_reshaped[:, 1:, :, :].permute(0, 2, 3, 1).reshape(batch_size, -1, 8)
         
-        losses = []
-        for i in range(batch_size):
-            if pass_flag[i] == 1:
-                target = torch.zeros(1 + grid_size * grid_size * 8, device=self.device)
-                target[0] = 1.0
-            else:
-                r, c, d, s = int(row[i]), int(col[i]), int(direction[i]), int(split[i])
-                if r >= grid_size or c >= grid_size:
-                    continue
-                
-                flat_idx = r * grid_size + c
-                action_idx = d * 2 + s
-                
-                target = torch.zeros(1 + grid_size * grid_size * 8, device=self.device)
-                target[1 + flat_idx * 8 + action_idx] = 1.0
-            
-            all_logits = torch.cat([
-                pass_logits[i:i+1],
-                action_logits[i].flatten()
-            ])
-            
-            log_probs = F.log_softmax(all_logits, dim=0)
-            loss = F.kl_div(log_probs, target, reduction='sum')
-            losses.append(loss)
+        # Vectorized target creation
+        num_actions = 1 + grid_size * grid_size * 8
+        targets = torch.zeros(batch_size, num_actions, device=self.device)
         
-        if len(losses) == 0:
-            return torch.zeros(batch_size, device=self.device)
+        # Pass actions
+        pass_mask = (pass_flag == 1)
+        targets[pass_mask, 0] = 1.0
         
-        return torch.stack(losses)
+        # Move actions
+        move_mask = ~pass_mask
+        valid_move_mask = move_mask & (row < grid_size) & (col < grid_size)
+        
+        if valid_move_mask.any():
+            flat_idx = row[valid_move_mask] * grid_size + col[valid_move_mask]
+            action_idx = direction[valid_move_mask] * 2 + split[valid_move_mask]
+            target_idx = 1 + flat_idx * 8 + action_idx
+            targets[valid_move_mask.nonzero(as_tuple=True)[0], target_idx] = 1.0
+        
+        # Compute loss for all samples at once
+        all_logits = torch.cat([
+            pass_logits.unsqueeze(1),
+            action_logits.reshape(batch_size, -1)
+        ], dim=1)
+        
+        log_probs = F.log_softmax(all_logits, dim=1)
+        losses = F.kl_div(log_probs, targets, reduction='none').sum(dim=1)
+        
+        return losses
     
     def train_epoch(self, epoch: int):
         self.model.train()
@@ -261,13 +267,16 @@ class BehaviorCloningTrainer:
             
             batch_size, seq_len = obs_seq.shape[:2]
             
-            self.optimizer.zero_grad()
-            
             # Initialize hidden state for the batch
             hidden_state = None
             
             # Truncated Backpropagation Through Time (TBPTT)
             tbptt_steps = self.config['training'].get('tbptt_steps', 32)
+            
+            batch_total_loss = 0.0
+            batch_num_chunks = 0
+            
+            use_amp = self.scaler is not None
             
             for t_start in range(0, seq_len, tbptt_steps):
                 t_end = min(t_start + tbptt_steps, seq_len)
@@ -275,6 +284,8 @@ class BehaviorCloningTrainer:
                 # Check if any sequence in batch is still valid
                 if (lengths > t_start).sum() == 0:
                     break
+                
+                self.optimizer.zero_grad()
                 
                 chunk_loss = 0.0
                 valid_steps_in_chunk = 0
@@ -291,18 +302,8 @@ class BehaviorCloningTrainer:
                     # Extract visibility mask
                     vis_mask = self.extract_visibility_mask(obs_t)
                     
-                    if self.scaler is not None:
-                        with autocast():
-                            policy_logits, _, hidden_state = self.model(
-                                obs_t,
-                                hidden_state=hidden_state,
-                                visibility_mask=vis_mask,
-                                return_hidden=True
-                            )
-                            loss_t = self.compute_loss(obs_t, actions_t, policy_logits)
-                            loss_t = (loss_t * mask).sum()
-                            chunk_loss += loss_t
-                    else:
+                    # Forward pass with mixed precision if enabled
+                    with autocast(enabled=use_amp):
                         policy_logits, _, hidden_state = self.model(
                             obs_t,
                             hidden_state=hidden_state,
@@ -315,12 +316,11 @@ class BehaviorCloningTrainer:
                     
                     valid_steps_in_chunk += mask.sum()
                 
-                # Normalize loss for the chunk
+                # Optimize per chunk to avoid gradient accumulation issues
                 if valid_steps_in_chunk > 0:
                     chunk_loss = chunk_loss / valid_steps_in_chunk
                     
-                    # Backward pass for the chunk
-                    if self.scaler is not None:
+                    if use_amp:
                         self.scaler.scale(chunk_loss).backward()
                         self.scaler.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(
@@ -337,13 +337,16 @@ class BehaviorCloningTrainer:
                         )
                         self.optimizer.step()
                     
-                    self.optimizer.zero_grad()
-                    
                     # Detach hidden state for next chunk
                     if hidden_state is not None:
                         hidden_state = [(h.detach(), c.detach()) for h, c in hidden_state]
                     
-                    total_loss += chunk_loss.item()
+                    batch_total_loss += chunk_loss.item()
+                    batch_num_chunks += 1
+            
+            if batch_num_chunks > 0:
+                avg_batch_loss = batch_total_loss / batch_num_chunks
+                total_loss += avg_batch_loss
             
             self.scheduler.step()
             num_batches += 1
@@ -353,14 +356,14 @@ class BehaviorCloningTrainer:
             
             avg_loss = total_loss / num_batches
             pbar.set_postfix({
-                'loss': f"{chunk_loss.item():.4f}",
+                'loss': f"{avg_batch_loss:.4f}" if batch_num_chunks > 0 else "0.0000",
                 'avg_loss': f"{avg_loss:.4f}",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
             
-            if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
+            if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False) and batch_num_chunks > 0:
                 wandb.log({
-                    'train/loss': chunk_loss.item(),
+                    'train/loss': avg_batch_loss,
                     'train/avg_loss': avg_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
                     'train/step': self.global_step,
@@ -553,7 +556,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='/root/shared-nvme/oyx/bc_v2/configs/config_base.yaml',
+        default='/root/autodl-fs/RL_generals_bots/configs/config_base.yaml',
         help='Path to config file'
     )
     args = parser.parse_args()
