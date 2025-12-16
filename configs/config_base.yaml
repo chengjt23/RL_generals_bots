@@ -1,5 +1,5 @@
 training:
-  batch_size: 32  # Larger batch for efficiency
+  batch_size: 64  # Larger batch for efficiency
   max_sequence_length: 64  # Short sequences for speed (increase gradually if needed)
   tbptt_steps: 32  # TBPTT window (standard size)
   learning_rate: 0.0003
