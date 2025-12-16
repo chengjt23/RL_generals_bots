@@ -72,6 +72,10 @@ class SACAgent(Agent):
         self.opponent_last_action = Action(to_pass=True)
     
     def load_bc_weights(self, bc_model_path):
+        if bc_model_path is None:
+            print("  No BC model path provided, using random initialization")
+            return
+        
         ckpt = torch.load(bc_model_path, map_location=self.device, weights_only=False)
         if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
             bc_state_dict = ckpt['model_state_dict']

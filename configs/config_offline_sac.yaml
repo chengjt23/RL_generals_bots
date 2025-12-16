@@ -2,6 +2,7 @@ experiment:
   name: "offline_sac_cql_bc"
   bc_pretrain_path: "/root/shared-nvme/cjt/experiments/bc_trainvalue_nstep_td_20251215_174316/checkpoints/epoch_28_loss_-0.8559-1.9595-1.9595.pt"
   save_dir: "experiments"
+  use_bc_init: true  # Set to false for random initialization of all networks
 
 model:
   grid_size: 24

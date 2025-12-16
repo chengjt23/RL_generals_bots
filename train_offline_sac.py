@@ -54,11 +54,17 @@ class OfflineSACTrainer:
     def setup_agent(self):
         from agents.sac_network import initialize_critic_from_bc_value
         
+        # Check if BC initialization should be used
+        use_bc_init = self.config['experiment'].get('use_bc_init', True)
+        
+        # If using BC init, pass bc_model_path; otherwise pass None
+        bc_model_path = self.config['experiment'].get('bc_pretrain_path') if use_bc_init else None
+        
         self.agent = SACAgent(
             id="OfflineSAC",
             grid_size=self.config['model']['grid_size'],
             device=self.device,
-            bc_model_path=self.config['experiment']['bc_pretrain_path'],
+            bc_model_path=bc_model_path,
             memory_channels=self.config['model']['memory_channels'],
             gamma=self.config['training']['gamma'],
             tau=self.config['training']['tau'],
@@ -73,9 +79,10 @@ class OfflineSACTrainer:
             gradient_clip=self.config['training'].get('gradient_clip', 1.0),
         )
         
-        # Initialize critics from BC checkpoint (if CQL or BC regularization is enabled)
-        bc_path = self.config['experiment']['bc_pretrain_path']
-        if self.config['training'].get('cql_alpha', 0) > 0 or self.config['training'].get('bc_weight', 0) > 0:
+        # Only initialize critics from BC if BC init is enabled and CQL/BC regularization is enabled
+        if use_bc_init and (self.config['training'].get('cql_alpha', 0) > 0 or 
+                            self.config['training'].get('bc_weight', 0) > 0):
+            bc_path = self.config['experiment']['bc_pretrain_path']
             print("\nInitializing critics from BC Value Head...")
             initialize_critic_from_bc_value(self.agent.critic_1, bc_path, self.device)
             initialize_critic_from_bc_value(self.agent.critic_2, bc_path, self.device)
@@ -85,7 +92,10 @@ class OfflineSACTrainer:
             self.agent.critic_2_target.load_state_dict(self.agent.critic_2.state_dict())
             print("Initialized target networks from critics\n")
         
-        print(f"Loaded BC pretrained weights from: {bc_path}")
+        if use_bc_init:
+            print(f"Loaded BC pretrained weights from: {self.config['experiment']['bc_pretrain_path']}")
+        else:
+            print("Using random initialization for all networks")
     
     def setup_data(self):
         self.dataloader = create_offline_sac_dataloader(
@@ -117,12 +127,17 @@ class OfflineSACTrainer:
         
         global_step = self.start_step
         
+        use_bc_init = self.config['experiment'].get('use_bc_init', True)
+        
         print("\n" + "="*60)
         print("Offline SAC Training with CQL + BC Regularization")
         print("="*60)
         print(f"Training mode: Offline (using replay data)")
         print(f"Data source: {self.config['data']['data_dir']}")
-        print(f"BC pretrain: {self.config['experiment']['bc_pretrain_path']}")
+        if use_bc_init:
+            print(f"BC pretrain: {self.config['experiment'].get('bc_pretrain_path', 'N/A')}")
+        else:
+            print(f"Initialization: Random (BC init disabled)")
         print(f"CQL alpha: {self.config['training'].get('cql_alpha', 0.0)}")
         print(f"BC weight: {self.config['training'].get('bc_weight', 0.0)}")
         print(f"Gradient clip: {self.config['training'].get('gradient_clip', 1.0)}")
