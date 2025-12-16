@@ -4,7 +4,7 @@ training:
   tbptt_steps: 32  # TBPTT window (standard size)
   learning_rate: 0.0003
   num_epochs: 30
-  steps_per_epoch: 1000
+  steps_per_epoch: null  # null = process all data, or set number to limit
   gradient_clip: 1.0
   warmup_steps: 1000
   weight_decay: 0.0001

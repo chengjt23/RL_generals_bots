@@ -154,9 +154,11 @@ class BehaviorCloningTrainer:
         
         scheduler_config = self.config['scheduler']
         
-        self.steps_per_epoch = self.config['training'].get('steps_per_epoch', 20000)
+        self.steps_per_epoch = self.config['training'].get('steps_per_epoch', None)
         
-        num_training_steps = self.steps_per_epoch * self.config['training']['num_epochs']
+        # If steps_per_epoch is None, we'll step scheduler per batch
+        # If set, we limit batches per epoch
+        num_training_steps = (self.steps_per_epoch if self.steps_per_epoch else 10000) * self.config['training']['num_epochs']
         warmup_steps = self.config['training']['warmup_steps']
         
         def lr_lambda(current_step):
@@ -254,7 +256,7 @@ class BehaviorCloningTrainer:
             desc=f"Epoch {epoch}/{self.config['training']['num_epochs']} [Train]",
             unit="batch",
             leave=False,
-            total=self.steps_per_epoch
+            total=self.steps_per_epoch  # None = unknown length
         )
         
         for batch_idx, (obs_seq, actions_seq, lengths) in enumerate(pbar):
@@ -362,7 +364,8 @@ class BehaviorCloningTrainer:
             self.scheduler.step()
             num_batches += 1
             
-            if num_batches >= self.steps_per_epoch:
+            # Only break if steps_per_epoch is explicitly set
+            if self.steps_per_epoch is not None and num_batches >= self.steps_per_epoch:
                 break
             
             avg_loss = total_loss / num_batches
@@ -405,11 +408,23 @@ class BehaviorCloningTrainer:
             
             batch_size, seq_len = obs_seq.shape[:2]
             
+            # Limit sequence length to match training (prevent inf/nan)
+            max_seq_len = self.config['training'].get('max_sequence_length', None)
+            if max_seq_len is not None and seq_len > max_seq_len:
+                # Use first max_seq_len steps for validation (consistent)
+                obs_seq = obs_seq[:, :max_seq_len]
+                actions_seq = actions_seq[:, :max_seq_len]
+                lengths = torch.clamp(lengths, max=max_seq_len)
+                seq_len = max_seq_len
+            
             # Initialize hidden state for the batch
             hidden_state = None
             
             # Truncated Backpropagation Through Time (TBPTT)
             tbptt_steps = self.config['training'].get('tbptt_steps', 32)
+            
+            batch_loss_sum = 0.0
+            batch_num_chunks = 0
             
             for t_start in range(0, seq_len, tbptt_steps):
                 t_end = min(t_start + tbptt_steps, seq_len)
@@ -453,7 +468,13 @@ class BehaviorCloningTrainer:
                     if hidden_state is not None:
                         hidden_state = [(h.detach(), c.detach()) for h, c in hidden_state]
                     
-                    total_loss += chunk_loss.item()
+                    batch_loss_sum += chunk_loss.item()
+                    batch_num_chunks += 1
+            
+            # Average loss for this batch
+            if batch_num_chunks > 0:
+                batch_avg_loss = batch_loss_sum / batch_num_chunks
+                total_loss += batch_avg_loss
             
             num_batches += 1
             
