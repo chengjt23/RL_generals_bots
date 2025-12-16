@@ -1,0 +1,63 @@
+experiment:
+  name: ppo_selfplay
+  save_dir: experiments
+  bc_pretrain_path: experiments/behavior_cloning_20251028_010911/checkpoints/best_model.pt
+
+model:
+  obs_channels: 15
+  memory_channels: 20
+  base_channels: 64
+  grid_size: 24
+
+training:
+  total_iterations: 10000
+  n_steps_per_update: 2048
+  n_parallel_envs: 16
+  batch_size: 256
+  ppo_epochs: 4
+  
+  gamma: 0.99
+  gae_lambda: 0.95
+  
+  clip_epsilon: 0.2
+  value_clip_epsilon: 0.2
+  value_loss_coef: 0.5
+  entropy_coef: 0.01
+  
+  learning_rate: 0.0003
+  max_grad_norm: 0.5
+  
+  warmup_iterations: 100
+  eval_frequency: 50
+  save_frequency: 100
+  log_frequency: 10
+  
+  max_episode_steps: 1000
+  
+  device: cuda
+  seed: 42
+
+opponent_pool:
+  max_size: 20
+  initial_elo: 1500
+  k_factor: 32
+  temperature: 0.5
+  update_freq: 50
+  warmup_iterations: 100
+
+reward:
+  land_weight: 0.4
+  army_weight: 0.4
+  castle_weight: 0.2
+  max_ratio: 100.0
+  gamma: 0.99
+
+multi_gpu:
+  enabled: false
+  strategy: ddp
+
+logging:
+  use_wandb: true
+  project_name: generals-rl-ppo
+  wandb_entity: null
+
