@@ -1,7 +1,7 @@
 experiment:
   name: ppo_selfplay
   save_dir: experiments
-  bc_pretrain_path: experiments/behavior_cloning_20251028_010911/checkpoints/best_model.pt
+  bc_pretrain_path: /root/shared-nvme/cjt/experiments/epoch_15_loss_1.6333.pt
 
 model:
   obs_channels: 15
@@ -13,7 +13,7 @@ training:
   total_iterations: 10000
   n_steps_per_update: 2048
   n_parallel_envs: 16
-  batch_size: 256
+  batch_size: 512
   ppo_epochs: 4
   
   gamma: 0.99
@@ -38,7 +38,7 @@ training:
   seed: 42
 
 opponent_pool:
-  max_size: 20
+  max_size: 3
   initial_elo: 1500
   k_factor: 32
   temperature: 0.5
@@ -57,7 +57,7 @@ multi_gpu:
   strategy: ddp
 
 logging:
-  use_wandb: true
+  use_wandb: false
   project_name: generals-rl-ppo
   wandb_entity: null
 

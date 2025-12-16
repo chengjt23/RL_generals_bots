@@ -176,33 +176,22 @@ class PPOTrainer:
         prior_observations = [obs_dict["Agent"] for obs_dict in obs_dicts]
         
         for step in range(n_steps):
-            agent_actions = []
-            agent_log_probs = []
-            agent_values = []
+            observations = [obs_dicts[env_idx]["Agent"] for env_idx in range(n_envs)]
+            
+            agent_actions, agent_log_probs, agent_values = self.agent.act_with_value_batch(
+                observations, self.agent_memories
+            )
+            
             obs_tensors = []
             memory_tensors = []
-            
             for env_idx in range(n_envs):
-                obs = obs_dicts[env_idx]["Agent"]
-                obs.pad_observation(pad_to=self.agent.grid_size)
-                
-                self.agent.memory = self.agent_memories[env_idx]
-                
-                action, log_prob, value = self.agent.act_with_value(obs)
-                
-                self.agent_memories[env_idx] = copy.deepcopy(self.agent.memory)
-                
-                agent_actions.append(action)
-                agent_log_probs.append(log_prob)
-                agent_values.append(value)
-                
-                obs_tensor = torch.from_numpy(obs.as_tensor()).float().numpy()
+                obs_tensor = torch.from_numpy(observations[env_idx].as_tensor()).float().numpy()
                 memory_tensor = self.agent_memories[env_idx].get_memory_features()
-                
                 obs_tensors.append(obs_tensor)
                 memory_tensors.append(memory_tensor)
             
             opponent_actions = []
+            
             for env_idx, opponent in enumerate(current_opponents):
                 if opponent_memories[env_idx] is not None:
                     opponent.memory = opponent_memories[env_idx]
@@ -211,9 +200,9 @@ class PPOTrainer:
                 else:
                     opp_action = opponent.act(obs_dicts[env_idx]["Opponent"])
                 opponent_actions.append(opp_action)
-            
+
             next_obs_dicts, rewards_dicts, dones, next_infos = self.envs.step(agent_actions, opponent_actions)
-            
+
             for env_idx in range(n_envs):
                 reward = self.reward_fn(
                     prior_observations[env_idx],
@@ -272,14 +261,24 @@ class PPOTrainer:
             obs_dicts = next_obs_dicts
             prior_observations = [obs_dict["Agent"] for obs_dict in obs_dicts]
         
-        last_values = []
-        for env_idx in range(n_envs):
-            obs = obs_dicts[env_idx]["Agent"]
-            self.agent.memory = self.agent_memories[env_idx]
-            value = self.agent.get_value(obs)
-            last_values.append(value)
+        last_observations = [obs_dicts[env_idx]["Agent"] for env_idx in range(n_envs)]
         
-        last_values = np.array(last_values)
+        obs_tensors = []
+        memory_tensors = []
+        for i in range(n_envs):
+            obs = last_observations[i]
+            obs.pad_observation(pad_to=self.agent.grid_size)
+            obs_tensor = torch.from_numpy(obs.as_tensor()).float()
+            obs_tensors.append(obs_tensor)
+            
+            memory_tensor = torch.from_numpy(self.agent_memories[i].get_memory_features()).float()
+            memory_tensors.append(memory_tensor)
+        
+        obs_batch = torch.stack(obs_tensors).to(self.agent.device)
+        memory_batch = torch.stack(memory_tensors).to(self.agent.device)
+        with torch.no_grad():
+            _, values_batch = self.agent.network(obs_batch, memory_batch)
+        last_values = values_batch.squeeze(-1).cpu().numpy()
         
         self.buffer.finish_trajectory(
             last_values,

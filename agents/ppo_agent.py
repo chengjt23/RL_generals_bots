@@ -112,6 +112,43 @@ class PPOAgent(Agent):
         
         return action, log_prob, value.item()
     
+    def act_with_value_batch(self, observations, memories):
+        batch_size = len(observations)
+        
+        obs_tensors = []
+        memory_tensors = []
+        
+        for i in range(batch_size):
+            obs = observations[i]
+            obs.pad_observation(pad_to=self.grid_size)
+            obs_tensor = torch.from_numpy(obs.as_tensor()).float()
+            obs_tensors.append(obs_tensor)
+            
+            memory_tensor = torch.from_numpy(memories[i].get_memory_features()).float()
+            memory_tensors.append(memory_tensor)
+        
+        obs_batch = torch.stack(obs_tensors).to(self.device)
+        memory_batch = torch.stack(memory_tensors).to(self.device)
+        
+        with torch.no_grad():
+            policy_logits_batch, values_batch = self.network(obs_batch, memory_batch)
+        
+        actions = []
+        log_probs = []
+        values = []
+        
+        for i in range(batch_size):
+            policy_logits = policy_logits_batch[i]
+            value = values_batch[i]
+            
+            action, log_prob = self._sample_action_with_log_prob(policy_logits, observations[i])
+            
+            actions.append(action)
+            log_probs.append(log_prob)
+            values.append(value.item())
+        
+        return actions, log_probs, values
+    
     def get_value(self, observation: Observation):
         observation.pad_observation(pad_to=self.grid_size)
         obs_tensor = self._prepare_observation(observation)
@@ -134,56 +171,30 @@ class PPOAgent(Agent):
         for i in range(batch_size):
             action = action_batch[i]
             logits = policy_logits[i]
-            obs_tensor = obs_batch[i]
-            
-            obs = Observation.from_numpy_array(obs_tensor.cpu().numpy())
-            valid_mask = compute_valid_move_mask(obs)
-            
-            pass_logit = logits[0, 0, 0]
-            
-            all_logits_list = [pass_logit]
-            action_positions = []
-            
-            for direction in range(4):
-                for split in range(2):
-                    action_idx = 1 + direction * 2 + split
-                    mask_slice = valid_mask[:, :, direction]
-                    valid_positions = torch.from_numpy(mask_slice).nonzero()
-                    
-                    for pos in valid_positions:
-                        row_pos, col_pos = pos[0].item(), pos[1].item()
-                        action_logit = logits[action_idx, row_pos, col_pos]
-                        all_logits_list.append(action_logit)
-                        action_positions.append((row_pos, col_pos, direction, split))
-            
-            all_logits = torch.stack(all_logits_list)
-            probs = F.softmax(all_logits, dim=0)
-            log_probs_tensor = F.log_softmax(all_logits, dim=0)
             
             pass_flag = action[0].item()
+            pass_logit = logits[0, 0, 0]
+            
             if pass_flag == 1:
-                chosen_idx = 0
+                all_logits = torch.stack([pass_logit])
+                probs = F.softmax(all_logits, dim=0)
+                log_probs_tensor = F.log_softmax(all_logits, dim=0)
+                log_prob = log_probs_tensor[0]
+                entropy = -(probs * log_probs_tensor).sum()
             else:
                 row = action[1].item()
                 col = action[2].item()
                 direction = action[3].item()
                 split = action[4].item()
                 
-                chosen_idx = 0
-                for idx, (r, c, d, s) in enumerate(action_positions):
-                    if r == row and c == col and d == direction and s == split:
-                        chosen_idx = idx + 1
-                        break
+                action_idx = 1 + direction * 2 + split
+                action_logit = logits[action_idx, row, col]
                 
-                if chosen_idx == 0:
-                    raise ValueError(
-                        f"Action not found in valid actions: row={row}, col={col}, "
-                        f"direction={direction}, split={split}. "
-                        f"Available actions: {len(action_positions)}"
-                    )
-            
-            log_prob = log_probs_tensor[chosen_idx]
-            entropy = -(probs * log_probs_tensor).sum()
+                all_logits = torch.stack([pass_logit, action_logit])
+                probs = F.softmax(all_logits, dim=0)
+                log_probs_tensor = F.log_softmax(all_logits, dim=0)
+                log_prob = log_probs_tensor[1]
+                entropy = -(probs * log_probs_tensor).sum()
             
             log_probs.append(log_prob)
             entropies.append(entropy)
