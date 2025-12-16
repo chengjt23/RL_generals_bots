@@ -224,6 +224,8 @@ class PPOTrainer:
                 action_array = action_to_array(agent_actions[env_idx])
                 
                 self.buffer.store_transition(
+                    step,
+                    env_idx,
                     obs_tensors[env_idx],
                     memory_tensors[env_idx],
                     action_array,

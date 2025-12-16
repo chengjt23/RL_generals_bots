@@ -20,19 +20,15 @@ class TrajectoryBuffer:
         
         self.advantages = np.zeros((n_steps, n_envs), dtype=np.float32)
         self.returns = np.zeros((n_steps, n_envs), dtype=np.float32)
-        
-        self.step = 0
     
-    def store_transition(self, obs, memory, action, log_prob, value, reward, done):
-        self.observations[self.step] = obs
-        self.memories[self.step] = memory
-        self.actions[self.step] = action
-        self.log_probs[self.step] = log_prob
-        self.values[self.step] = value
-        self.rewards[self.step] = reward
-        self.dones[self.step] = done
-        
-        self.step += 1
+    def store_transition(self, step, env_idx, obs, memory, action, log_prob, value, reward, done):
+        self.observations[step, env_idx] = obs
+        self.memories[step, env_idx] = memory
+        self.actions[step, env_idx] = action
+        self.log_probs[step, env_idx] = log_prob
+        self.values[step, env_idx] = value
+        self.rewards[step, env_idx] = reward
+        self.dones[step, env_idx] = done
     
     def finish_trajectory(self, last_values, gamma=0.99, gae_lambda=0.95):
         last_gae_lam = np.zeros(self.n_envs)
@@ -88,5 +84,5 @@ class TrajectoryBuffer:
             yield batch
     
     def clear(self):
-        self.step = 0
+        pass
 
