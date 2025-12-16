@@ -89,12 +89,12 @@ class SOTAAgent(Agent):
         """Convert Observation to dict format needed by MemoryAugmentation"""
         tensor = obs.as_tensor()
         return {
-            'fog_cells': tensor[0],
-            'structures_in_fog': tensor[1],
+            'fog_cells': tensor[7],
+            'structures_in_fog': tensor[8],
             'cities': tensor[2],
-            'generals': tensor[3],
-            'owned_cells': tensor[4],
-            'opponent_cells': tensor[5],
+            'generals': tensor[1],
+            'owned_cells': tensor[5],
+            'opponent_cells': tensor[6],
         }
     
     def _prepare_observation(self, obs: Observation) -> torch.Tensor:

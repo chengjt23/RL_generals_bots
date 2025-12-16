@@ -24,13 +24,13 @@ data:
   data_dir: data/generals_io_replays
   grid_size: 24
   min_stars: 70
-  max_turns: 500
+  max_turns: 1000
   max_replays: 18803
   train_split: 0.95
 
 model:
   obs_channels: 15
-  memory_channels: 18
+  memory_channels: 19
   base_channels: 64
   grid_size: 24
 
@@ -50,7 +50,7 @@ logging:
   tensorboard: true
   use_wandb: true
   wandb_project: generals-rl
-  wandb_tags: [behavior_cloning, base]
+  wandb_tags: [behavior_cloning_cyh, base]
 
 seed: 42
 

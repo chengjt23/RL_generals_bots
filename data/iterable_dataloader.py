@@ -131,7 +131,9 @@ class GeneralsReplayIterableDataset(IterableDataset):
         memory_0 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
         memory_1 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
         
+        turn_step = 0
         for move in replay['moves']:
+            turn_step += 1
             if len(move) < 5:
                 continue
             
@@ -177,6 +179,24 @@ class GeneralsReplayIterableDataset(IterableDataset):
             else:
                 actions["player_1"] = action
             
+            # Filter opponent actions based on visibility to prevent "God mode"
+            # We use the pre-step observation to check if the move start position was visible
+            action_0_for_memory = actions["player_0"].copy()
+            action_1_for_memory = actions["player_1"].copy()
+            
+            # Filter Player 1's action for Player 0's memory
+            if action_1_for_memory[0] == 0: # Move
+                r, c = action_1_for_memory[1], action_1_for_memory[2]
+                # Check if start tile is in fog (channel 0 > 0)
+                if obs_0.as_tensor()[0, r, c] > 0:
+                    action_1_for_memory = np.array([1, 0, 0, 0, 0], dtype=np.int8) # Mask as Pass
+
+            # Filter Player 0's action for Player 1's memory
+            if action_0_for_memory[0] == 0: # Move
+                r, c = action_0_for_memory[1], action_0_for_memory[2]
+                if obs_1.as_tensor()[0, r, c] > 0:
+                    action_0_for_memory = np.array([1, 0, 0, 0, 0], dtype=np.int8)
+            
             try:
                 game.step(actions)
                 
@@ -190,8 +210,8 @@ class GeneralsReplayIterableDataset(IterableDataset):
                 obs_0_dict = self._obs_to_dict(obs_0_after)
                 obs_1_dict = self._obs_to_dict(obs_1_after)
                 
-                memory_0.update(obs_0_dict, actions["player_0"], actions["player_1"])
-                memory_1.update(obs_1_dict, actions["player_1"], actions["player_0"])
+                memory_0.update(obs_0_dict, actions["player_0"], action_1_for_memory, turn_step=turn_step)
+                memory_1.update(obs_1_dict, actions["player_1"], action_0_for_memory, turn_step=turn_step)
             except Exception:
                 break
     
@@ -244,6 +264,7 @@ class GeneralsReplayIterableDataset(IterableDataset):
             'generals': tensor[3],
             'owned_cells': tensor[4],
             'opponent_cells': tensor[5],
+            'armies': obs.armies,
         }
 
 

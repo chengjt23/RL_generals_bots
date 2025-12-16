@@ -30,7 +30,7 @@ data:
 
 model:
   obs_channels: 15
-  memory_channels: 18
+  memory_channels: 19
   base_channels: 64
   grid_size: 24
 
