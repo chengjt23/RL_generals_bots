@@ -77,6 +77,7 @@ class BehaviorCloningTrainer:
             
             wandb.init(
                 project=self.config['logging'].get('wandb_project', 'generals-rl'),
+                entity='chengyon23-',
                 name=f"{exp_name}_{timestamp}",
                 config=self.config,
                 dir=str(self.exp_dir),
@@ -91,11 +92,19 @@ class BehaviorCloningTrainer:
                 print("Wandb disabled in config")
     
     def setup_data(self):
+        # print data configs
+        print("Data configuration:")
+        print(yaml.dump(self.config['data']))
+
         data_config = self.config['data']
         train_config = self.config['training']
         
         train_replays = int(data_config['max_replays'] * data_config['train_split'])
         val_replays = data_config['max_replays'] - train_replays
+
+        # print train and val replays
+        print(f"Train replays (streaming): {train_replays}")
+        print(f"Validation replays: {val_replays}")
         
         self.train_loader = create_iterable_dataloader(
             data_dir=data_config['data_dir'],
@@ -230,17 +239,10 @@ class BehaviorCloningTrainer:
             total=self.steps_per_epoch
         )
         
-        for batch_idx, (obs, actions, _) in enumerate(pbar):
+        for batch_idx, (obs, memory, actions, _) in enumerate(pbar):
             obs = obs.to(self.device)
+            memory = memory.to(self.device)
             actions = actions.to(self.device)
-            
-            memory = torch.zeros(
-                obs.shape[0],
-                self.config['model']['memory_channels'],
-                self.config['model']['grid_size'],
-                self.config['model']['grid_size'],
-                device=self.device
-            )
             
             self.optimizer.zero_grad()
             
@@ -308,17 +310,10 @@ class BehaviorCloningTrainer:
             leave=False
         )
         
-        for obs, actions, _ in pbar:
+        for obs, memory, actions, _ in pbar:
             obs = obs.to(self.device)
+            memory = memory.to(self.device)
             actions = actions.to(self.device)
-            
-            memory = torch.zeros(
-                obs.shape[0],
-                self.config['model']['memory_channels'],
-                self.config['model']['grid_size'],
-                self.config['model']['grid_size'],
-                device=self.device
-            )
             
             policy_logits, _ = self.model(obs, memory)
             loss = self.compute_loss(obs, actions, policy_logits)
@@ -334,6 +329,7 @@ class BehaviorCloningTrainer:
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
             wandb.log({
                 'val/loss': final_avg_loss,
+                'val/step': self.global_step,
             }, step=self.global_step)
         
         return final_avg_loss
@@ -395,6 +391,9 @@ class BehaviorCloningTrainer:
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
                 wandb.log({
                     'epoch': epoch,
+                    'epoch/train_loss': train_loss,
+                    'epoch/val_loss': val_loss,
+                    'epoch/learning_rate': self.scheduler.get_last_lr()[0],
                 }, step=self.global_step)
             
             self.save_checkpoint(epoch, val_loss)
@@ -432,7 +431,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='RL/configs/behavior_cloning.yaml',
+        default='/root/autodl-fs/RL_generals_bots/configs/config_base.yaml',
         help='Path to config file'
     )
     args = parser.parse_args()
