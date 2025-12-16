@@ -55,7 +55,7 @@ class SACAgent(Agent):
             self.load_bc_weights(bc_model_path)
         
         action_space_size = 9 * grid_size * grid_size
-        self.target_entropy = float(-np.log(1.0 / action_space_size) * 0.98)
+        self.target_entropy = float(-np.log(1.0 / action_space_size) * 0.9)
         
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(list(self.critic_1.parameters()) + list(self.critic_2.parameters()), lr=critic_lr)

@@ -25,7 +25,7 @@ class OfflineSACDataset(IterableDataset):
         self.max_turns = max_turns
         self.max_replays = max_replays
         
-        self.reward_fn = PotentialBasedRewardFn()
+        self.reward_fn = PotentialBasedRewardFn(land_weight=0.4, army_weight=0.4, castle_weight=0.2)
         
         try:
             import pyarrow.parquet as pq
@@ -208,10 +208,10 @@ class OfflineSACDataset(IterableDataset):
                 done = np.float32(0.0)
                 if agent_generals_next == 0 and agent_generals_current > 0:
                     done = np.float32(1.0)
-                    reward += -1.0
+                    reward += -10.0
                 elif opponent_generals_next == 0 and opponent_generals_current > 0:
                     done = np.float32(1.0)
-                    reward += 1.0
+                    reward += 10.0
                 
                 reward = np.float32(reward)
                 

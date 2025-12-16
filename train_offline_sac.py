@@ -193,12 +193,14 @@ class OfflineSACTrainer:
                 
                 if global_step % log_frequency == 0:
                     avg_critic_loss = np.mean(epoch_losses['critic_loss'][-100:]) if epoch_losses['critic_loss'] else 0
+                    avg_bellman_loss = np.mean(epoch_losses['bellman_loss'][-100:]) if epoch_losses['bellman_loss'] else 0
                     avg_actor_loss = np.mean(epoch_losses['actor_loss'][-100:]) if epoch_losses['actor_loss'] else 0
                     avg_alpha = np.mean(epoch_losses['alpha'][-100:]) if epoch_losses['alpha'] else 0
                     avg_entropy = np.mean(epoch_losses['entropy'][-100:]) if epoch_losses['entropy'] else 0
                     
                     pbar.set_postfix({
                         'c_loss': f'{avg_critic_loss:.3f}',
+                        'b_loss': f'{avg_bellman_loss:.3f}',
                         'a_loss': f'{avg_actor_loss:.3f}',
                         'alpha': f'{avg_alpha:.3f}',
                         'entropy': f'{avg_entropy:.2f}'
@@ -207,7 +209,7 @@ class OfflineSACTrainer:
                     if self.use_wandb:
                         log_dict = {
                             'critic_loss': avg_critic_loss,
-                            'bellman_loss': np.mean(epoch_losses['bellman_loss'][-100:]) if epoch_losses['bellman_loss'] else 0,
+                            'bellman_loss': avg_bellman_loss,
                             'cql_loss': np.mean(epoch_losses['cql_loss'][-100:]) if epoch_losses['cql_loss'] else 0,
                             'actor_loss': avg_actor_loss,
                             'sac_actor_loss': np.mean(epoch_losses['sac_actor_loss'][-100:]) if epoch_losses['sac_actor_loss'] else 0,

@@ -4,23 +4,25 @@ sys.path.append('..')
 import os
 import argparse
 import torch
+import numpy as np
 import yaml
 from pathlib import Path
 from tqdm import tqdm
 from agents.sac_agent import SACAgent
 from agents.sota_agent import SOTAAgent
 from generals.envs import PettingZooGenerals
+import imageio
 
 try:
     import pygame
     from PIL import Image
-    GIF_AVAILABLE = True
+    RENDER_AVAILABLE = True
 except ImportError:
-    GIF_AVAILABLE = False
-    print("Warning: pygame or PIL not available, GIF recording disabled")
+    RENDER_AVAILABLE = False
+    print("Warning: pygame or PIL not available, video recording disabled")
 
 
-def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbose: bool = False, save_gif: bool = False, gif_path: str = "first_game.gif", max_steps: int = 1000):
+def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbose: bool = False, save_video: bool = False, video_dir: str = "videos", max_steps: int = 1000):
     print("\n" + "="*70)
     print("SAC Agent vs BC Model Competition")
     print("="*70)
@@ -28,9 +30,14 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
     
-    if save_gif and not GIF_AVAILABLE:
-        print("Warning: Cannot save GIF (pygame or PIL not installed)")
-        save_gif = False
+    # Video recording setup
+    record_videos = save_video
+    if record_videos and not RENDER_AVAILABLE:
+        print("Warning: Cannot record video (pygame or PIL not installed)")
+        record_videos = False
+    videos_dir = Path(video_dir).resolve()
+    if record_videos:
+        videos_dir.mkdir(exist_ok=True)
     
     print(f"\nLoading models...")
     sac_agent = SACAgent(
@@ -59,7 +66,7 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
     )
     print(f"  BC Agent loaded from: {bc_model_path}")
     
-    render_mode = "human" if (save_gif and GIF_AVAILABLE) else None
+    render_mode = "human" if record_videos else None
     if render_mode == "human":
         os.environ["SDL_VIDEODRIVER"] = "dummy"
         import pygame
@@ -72,11 +79,9 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
     bc_rewards = []
     game_lengths = []
     
-    frames = []
-    
     print(f"\nStarting {num_games} games...")
-    if save_gif:
-        print(f"Recording first game to {gif_path}...")
+    if record_videos:
+        print(f"Recording all games to directory: {videos_dir}")
     print("="*70)
     
     for game_num in range(num_games):
@@ -89,7 +94,8 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
         bc_episode_reward = 0
         step = 0
         
-        recording = save_gif and game_num == 0
+        recording = record_videos
+        frames = [] if recording else None
         
         pbar = tqdm(total=max_steps, desc=f"Game {game_num + 1}/{num_games}", 
                    leave=False, disable=(not verbose and (game_num + 1) % 10 != 0))
@@ -118,10 +124,10 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
                     surface = renderer.screen
                     img_str = pygame.image.tostring(surface, 'RGB')
                     img = Image.frombytes('RGB', surface.get_size(), img_str)
-                    frames.append(img)
+                    frames.append(np.array(img))
                 except (AttributeError, NameError):
                     if step == 1:
-                        print("Warning: Could not capture frames for GIF")
+                        print("Warning: Could not capture frames for video")
                     recording = False
         
         pbar.close()
@@ -145,22 +151,16 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
                   f"SAC reward: {sac_episode_reward:6.1f} | "
                   f"BC reward: {bc_episode_reward:6.1f}")
     
-    env.close()
+        env.close()
     
-    if frames and save_gif:
-        print(f"\nSaving GIF with {len(frames)} frames to '{gif_path}'...")
-        try:
-            frames[0].save(
-                gif_path,
-                save_all=True,
-                append_images=frames[1:],
-                optimize=False,
-                duration=100,
-                loop=0
-            )
-            print(f"✓ GIF saved successfully to {gif_path}")
-        except Exception as e:
-            print(f"✗ Failed to save GIF: {e}")
+        if recording and frames:
+            video_path = videos_dir / f"game_{game_num + 1}.mp4"
+            try:
+                imageio.mimsave(video_path, frames, fps=10, quality=8)
+                if verbose or (game_num + 1) % 10 == 0:
+                    print(f"Saved video for game {game_num + 1} to '{video_path}'")
+            except Exception as e:
+                print(f"✗ Failed to save video for game {game_num + 1}: {e}")
     
     total_games = num_games
     draws = total_games - sac_wins - bc_wins
@@ -220,10 +220,10 @@ if __name__ == '__main__':
                        help='Maximum steps per game (default: 1000)')
     parser.add_argument('--verbose', action='store_true',
                        help='Print result for every game')
-    parser.add_argument('--save_gif', action='store_true',
-                       help='Save first game as GIF')
-    parser.add_argument('--gif_path', type=str, default='first_game.gif',
-                       help='Path to save GIF file (default: first_game.gif)')
+    parser.add_argument('--save_video', action='store_true',
+                       help='Save each game as MP4 video')
+    parser.add_argument('--video_dir', type=str, default='videos',
+                       help='Directory to save videos (default: videos)')
     args = parser.parse_args()
     
     compete(
@@ -231,8 +231,8 @@ if __name__ == '__main__':
         bc_model_path=args.bc_model,
         num_games=args.num_games,
         verbose=args.verbose,
-        save_gif=args.save_gif,
-        gif_path=args.gif_path,
+        save_video=args.save_video,
+        video_dir=args.video_dir,
         max_steps=args.max_steps
     )
 
