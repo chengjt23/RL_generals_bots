@@ -25,27 +25,18 @@ class GeneralsReplayIterableDataset(IterableDataset):
         self.max_turns = max_turns
         self.max_replays = max_replays
         
-        try:
-            import pyarrow.parquet as pq
-            self.parquet_file = pq.ParquetFile(
-                self.data_dir / "data" / "train-00000-of-00001.parquet"
-            )
-            self.use_pyarrow = True
-        except ImportError:
-            import pandas as pd
-            self.df = pd.read_parquet(self.data_dir / "data" / "train-00000-of-00001.parquet")
-            self.use_pyarrow = False
+        import pyarrow.parquet as pq
+        self.parquet_file = pq.ParquetFile(
+            self.data_dir / "data" / "train-00000-of-00001.parquet"
+        )
         
-        if self.use_pyarrow:
-            self.num_row_groups = self.parquet_file.num_row_groups
-        else:
-            self.num_replays = len(self.df)
-            if max_replays is not None:
-                self.num_replays = min(self.num_replays, max_replays)
+        self.num_row_groups = self.parquet_file.num_row_groups
     
     def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor, int]]:
         worker_info = get_worker_info()
         
+        print("worker info:", worker_info)
+        input()
         if worker_info is None:
             w_id = 0
             w_num = 1
@@ -53,53 +44,33 @@ class GeneralsReplayIterableDataset(IterableDataset):
             w_id = worker_info.id
             w_num = worker_info.num_workers
         
-        if self.use_pyarrow:
-            groups_per_worker = (self.num_row_groups + w_num - 1) // w_num
-            start_group = w_id * groups_per_worker
-            end_group = min(self.num_row_groups, (w_id + 1) * groups_per_worker)
+        groups_per_worker = (self.num_row_groups + w_num - 1) // w_num
+        start_group = w_id * groups_per_worker
+        end_group = min(self.num_row_groups, (w_id + 1) * groups_per_worker)
+        
+        max_replays_per_worker = None
+        if self.max_replays is not None:
+            max_replays_per_worker = (self.max_replays + w_num - 1) // w_num
+        
+        valid_replay_count = 0
+        for g in range(start_group, end_group):
+            if max_replays_per_worker is not None and valid_replay_count >= max_replays_per_worker:
+                break
             
-            max_replays_per_worker = None
-            if self.max_replays is not None:
-                max_replays_per_worker = (self.max_replays + w_num - 1) // w_num
+            row_group = self.parquet_file.read_row_group(g)
+            batch = row_group.to_pydict()
             
-            valid_replay_count = 0
-            for g in range(start_group, end_group):
+            num_rows = len(batch['mapWidth'])
+            for i in range(num_rows):
                 if max_replays_per_worker is not None and valid_replay_count >= max_replays_per_worker:
                     break
                 
-                row_group = self.parquet_file.read_row_group(g)
-                batch = row_group.to_pydict()
-                
-                num_rows = len(batch['mapWidth'])
-                for i in range(num_rows):
-                    if max_replays_per_worker is not None and valid_replay_count >= max_replays_per_worker:
-                        break
-                    
-                    replay = {k: batch[k][i] for k in batch}
-                    
-                    if not self._is_valid_replay(replay):
-                        continue
-                    
-                    valid_replay_count += 1
-                    
-                    for sample in self._extract_samples_from_replay(replay):
-                        obs, memory, action, player_idx = sample
-                        obs_tensor = torch.from_numpy(obs).to(torch.float32)
-                        memory_tensor = torch.from_numpy(memory).to(torch.float32)
-                        action_tensor = torch.from_numpy(action).long()
-                        yield obs_tensor, memory_tensor, action_tensor, player_idx
-        else:
-            per_worker = self.num_replays // w_num
-            start_idx = w_id * per_worker
-            end_idx = start_idx + per_worker
-            if w_id == w_num - 1:
-                end_idx = self.num_replays
-            
-            for idx in range(start_idx, end_idx):
-                replay = self.df.iloc[idx].to_dict()
+                replay = {k: batch[k][i] for k in batch}
                 
                 if not self._is_valid_replay(replay):
                     continue
+                
+                valid_replay_count += 1
                 
                 for sample in self._extract_samples_from_replay(replay):
                     obs, memory, action, player_idx = sample
@@ -107,6 +78,7 @@ class GeneralsReplayIterableDataset(IterableDataset):
                     memory_tensor = torch.from_numpy(memory).to(torch.float32)
                     action_tensor = torch.from_numpy(action).long()
                     yield obs_tensor, memory_tensor, action_tensor, player_idx
+    
     
     def _is_valid_replay(self, replay: Dict) -> bool:
         if len(replay['moves']) > self.max_turns:
