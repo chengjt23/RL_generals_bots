@@ -38,7 +38,7 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
         grid_size=24,
         device=device,
         model_path=sac_checkpoint,
-        memory_channels=18
+        memory_channels=20
     )
     sac_agent.actor.eval()
     print(f"  SAC Agent loaded from: {sac_checkpoint}")
@@ -46,7 +46,7 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
     bc_config = {
         'grid_size': 24,
         'obs_channels': 15,
-        'memory_channels': 18,
+        'memory_channels': 20,
         'base_channels': 64
     }
     bc_agent = SOTAAgent(
@@ -55,7 +55,7 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
         grid_size=24,
         device=device,
         model_path=bc_model_path,
-        memory_channels=18
+        memory_channels=20
     )
     print(f"  BC Agent loaded from: {bc_model_path}")
     
