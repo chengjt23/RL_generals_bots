@@ -358,7 +358,10 @@ class SACAgent(Agent):
         # ============ Alpha Update ============
         if self.auto_tune_alpha:
             entropy = -(policy_probs * log_probs).sum(dim=-1).mean()
-            alpha_loss = -(self.log_alpha * (entropy - torch.tensor(self.target_entropy, dtype=torch.float32, device=self.device)).detach())
+            # Fix: Remove negative sign to correct gradient direction
+            # When entropy < target_entropy: grad < 0 → log_alpha increases → alpha increases → encourages higher entropy ✅
+            # When entropy > target_entropy: grad > 0 → log_alpha decreases → alpha decreases → encourages lower entropy ✅
+            alpha_loss = self.log_alpha * (entropy - torch.tensor(self.target_entropy, dtype=torch.float32, device=self.device)).detach()
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
