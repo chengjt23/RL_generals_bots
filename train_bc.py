@@ -115,6 +115,9 @@ class BehaviorCloningTrainer:
             max_turns=data_config['max_turns'],
         )
         
+        # Create persistent iterator for resuming
+        self.train_iterator = iter(self.train_loader)
+        
         val_dataset = GeneralsReplayDataset(
             data_dir=data_config['data_dir'],
             grid_size=data_config['grid_size'],
@@ -231,14 +234,20 @@ class BehaviorCloningTrainer:
         num_batches = 0
         
         pbar = tqdm(
-            self.train_loader,
+            range(self.steps_per_epoch),
             desc=f"Epoch {epoch}/{self.config['training']['num_epochs']} [Train]",
             unit="batch",
             leave=False,
-            total=self.steps_per_epoch
         )
         
-        for batch_idx, (obs, memory, actions, _) in enumerate(pbar):
+        for _ in pbar:
+            try:
+                obs, memory, actions, _ = next(self.train_iterator)
+            except StopIteration:
+                # Should not happen with infinite iterator, but just in case
+                self.train_iterator = iter(self.train_loader)
+                obs, memory, actions, _ = next(self.train_iterator)
+                
             obs = obs.to(self.device)
             memory = memory.to(self.device)
             actions = actions.to(self.device)
@@ -272,9 +281,6 @@ class BehaviorCloningTrainer:
             
             total_loss += loss.item()
             num_batches += 1
-            
-            if num_batches >= self.steps_per_epoch:
-                break
             
             avg_loss = total_loss / num_batches
             pbar.set_postfix({

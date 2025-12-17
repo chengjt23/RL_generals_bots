@@ -62,32 +62,38 @@ class GeneralsReplayIterableDataset(IterableDataset):
             if self.max_replays is not None:
                 max_replays_per_worker = (self.max_replays + w_num - 1) // w_num
             
-            valid_replay_count = 0
-            for g in range(start_group, end_group):
-                if max_replays_per_worker is not None and valid_replay_count >= max_replays_per_worker:
-                    break
+            while True:  # Infinite loop to allow resuming
+                # Shuffle row groups to ensure different data each epoch
+                group_indices = torch.arange(start_group, end_group)
+                perm = torch.randperm(len(group_indices))
+                shuffled_groups = group_indices[perm].tolist()
                 
-                row_group = self.parquet_file.read_row_group(g)
-                batch = row_group.to_pydict()
-                
-                num_rows = len(batch['mapWidth'])
-                for i in range(num_rows):
+                valid_replay_count = 0
+                for g in shuffled_groups:
                     if max_replays_per_worker is not None and valid_replay_count >= max_replays_per_worker:
                         break
                     
-                    replay = {k: batch[k][i] for k in batch}
+                    row_group = self.parquet_file.read_row_group(g)
+                    batch = row_group.to_pydict()
                     
-                    if not self._is_valid_replay(replay):
-                        continue
-                    
-                    valid_replay_count += 1
-                    
-                    for sample in self._extract_samples_from_replay(replay):
-                        obs, memory, action, player_idx = sample
-                        obs_tensor = torch.from_numpy(obs).to(torch.float32)
-                        memory_tensor = torch.from_numpy(memory).to(torch.float32)
-                        action_tensor = torch.from_numpy(action).long()
-                        yield obs_tensor, memory_tensor, action_tensor, player_idx
+                    num_rows = len(batch['mapWidth'])
+                    for i in range(num_rows):
+                        if max_replays_per_worker is not None and valid_replay_count >= max_replays_per_worker:
+                            break
+                        
+                        replay = {k: batch[k][i] for k in batch}
+                        
+                        if not self._is_valid_replay(replay):
+                            continue
+                        
+                        valid_replay_count += 1
+                        
+                        for sample in self._extract_samples_from_replay(replay):
+                            obs, memory, action, player_idx = sample
+                            obs_tensor = torch.from_numpy(obs).to(torch.float32)
+                            memory_tensor = torch.from_numpy(memory).to(torch.float32)
+                            action_tensor = torch.from_numpy(action).long()
+                            yield obs_tensor, memory_tensor, action_tensor, player_idx
         else:
             per_worker = self.num_replays // w_num
             start_idx = w_id * per_worker
@@ -95,18 +101,24 @@ class GeneralsReplayIterableDataset(IterableDataset):
             if w_id == w_num - 1:
                 end_idx = self.num_replays
             
-            for idx in range(start_idx, end_idx):
-                replay = self.df.iloc[idx].to_dict()
+            while True:  # Infinite loop to allow resuming
+                # Shuffle indices to ensure different data each epoch
+                indices = torch.arange(start_idx, end_idx)
+                perm = torch.randperm(len(indices))
+                shuffled_indices = indices[perm].tolist()
                 
-                if not self._is_valid_replay(replay):
-                    continue
-                
-                for sample in self._extract_samples_from_replay(replay):
-                    obs, memory, action, player_idx = sample
-                    obs_tensor = torch.from_numpy(obs).to(torch.float32)
-                    memory_tensor = torch.from_numpy(memory).to(torch.float32)
-                    action_tensor = torch.from_numpy(action).long()
-                    yield obs_tensor, memory_tensor, action_tensor, player_idx
+                for idx in shuffled_indices:
+                    replay = self.df.iloc[idx].to_dict()
+                    
+                    if not self._is_valid_replay(replay):
+                        continue
+                    
+                    for sample in self._extract_samples_from_replay(replay):
+                        obs, memory, action, player_idx = sample
+                        obs_tensor = torch.from_numpy(obs).to(torch.float32)
+                        memory_tensor = torch.from_numpy(memory).to(torch.float32)
+                        action_tensor = torch.from_numpy(action).long()
+                        yield obs_tensor, memory_tensor, action_tensor, player_idx
     
     def _is_valid_replay(self, replay: Dict) -> bool:
         if len(replay['moves']) > self.max_turns:
@@ -280,4 +292,5 @@ def create_iterable_dataloader(
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=num_workers > 0,
     )
