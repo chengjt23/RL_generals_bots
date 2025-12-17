@@ -45,7 +45,7 @@ scheduler:
   min_lr: 1.0e-6
 
 logging:
-  experiment_name: behavior_cloning
+  experiment_name: bc_new_mem
   save_dir: experiments
   tensorboard: true
   use_wandb: true
