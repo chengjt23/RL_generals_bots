@@ -104,8 +104,8 @@ class GeneralsReplayDataset(Dataset):
             return samples
         
         # Initialize memory augmentation for both players
-        memory_0 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
-        memory_1 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
+        memory_0 = MemoryAugmentation((self.grid_size, self.grid_size))
+        memory_1 = MemoryAugmentation((self.grid_size, self.grid_size))
         
         for move in replay['moves']:
             if len(move) < 5:
@@ -132,16 +132,18 @@ class GeneralsReplayDataset(Dataset):
             action_pass = np.array([1, 0, 0, 0, 0], dtype=np.int8)
             
             # Get current memory features before taking action
-            if player_idx == 0:
-                obs_0.pad_observation(pad_to=self.grid_size)
-                obs_tensor = obs_0.as_tensor().astype(np.float16, copy=True)
-                memory_features = memory_0.get_memory_features().astype(np.float16, copy=True)
-                samples.append((obs_tensor, memory_features, action.copy(), 0))
-            else:
-                obs_1.pad_observation(pad_to=self.grid_size)
-                obs_tensor = obs_1.as_tensor().astype(np.float16, copy=True)
-                memory_features = memory_1.get_memory_features().astype(np.float16, copy=True)
-                samples.append((obs_tensor, memory_features, action.copy(), 1))
+            # Only append sample if the player meets the star requirement
+            if replay['stars'][player_idx] >= self.min_stars:
+                if player_idx == 0:
+                    obs_0.pad_observation(pad_to=self.grid_size)
+                    obs_tensor = obs_0.as_tensor().astype(np.float16, copy=True)
+                    memory_features = memory_0.get_memory_features().astype(np.float16, copy=True)
+                    samples.append((obs_tensor, memory_features, action.copy(), 0))
+                else:
+                    obs_1.pad_observation(pad_to=self.grid_size)
+                    obs_tensor = obs_1.as_tensor().astype(np.float16, copy=True)
+                    memory_features = memory_1.get_memory_features().astype(np.float16, copy=True)
+                    samples.append((obs_tensor, memory_features, action.copy(), 1))
             
             actions = {
                 "player_0": np.array([1, 0, 0, 0, 0], dtype=np.int8),
@@ -166,8 +168,8 @@ class GeneralsReplayDataset(Dataset):
                 obs_0_dict = self._obs_to_dict(obs_0_after)
                 obs_1_dict = self._obs_to_dict(obs_1_after)
                 
-                memory_0.update(obs_0_dict, actions["player_0"], actions["player_1"])
-                memory_1.update(obs_1_dict, actions["player_1"], actions["player_0"])
+                memory_0.update(obs_0_dict, actions["player_0"])
+                memory_1.update(obs_1_dict, actions["player_1"])
             except Exception:
                 break
         

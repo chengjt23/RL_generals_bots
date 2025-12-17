@@ -25,12 +25,12 @@ data:
   grid_size: 24
   min_stars: 70
   max_turns: 500
-  max_replays: 18803
+  max_replays: 10
   train_split: 0.95
 
 model:
   obs_channels: 15
-  memory_channels: 20
+  memory_channels: 13
   base_channels: 64
   grid_size: 24
 

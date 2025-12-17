@@ -1,11 +1,10 @@
 import numpy as np
-from collections import deque
 
 
 class MemoryAugmentation:
-    def __init__(self, grid_shape: tuple[int, int], history_length: int = 7):
+    def __init__(self, grid_shape: tuple[int, int], decay: float = 0.95):
         self.grid_shape = grid_shape
-        self.history_length = history_length
+        self.decay = decay
         self.reset()
 
     def reset(self):
@@ -15,27 +14,58 @@ class MemoryAugmentation:
         self.last_seen_armies = np.zeros(self.grid_shape, dtype=np.float32)
         self.explored_cells = np.zeros(self.grid_shape, dtype=np.float32)
         self.opponent_visible_cells = np.zeros(self.grid_shape, dtype=np.float32)
-        self.action_history = deque(maxlen=self.history_length * 2)
+        
+        # New features
+        self.discovered_city_armies = np.zeros(self.grid_shape, dtype=np.float32)
+        self.last_seen_timestep = np.zeros(self.grid_shape, dtype=np.float32)
+        
+        # Action maps
+        # 4 directional channels: UP, DOWN, LEFT, RIGHT
+        self.action_overlays = np.zeros((4, *self.grid_shape), dtype=np.float32)
+        # 1 visit channel
+        self.action_visit = np.zeros(self.grid_shape, dtype=np.float32)
 
-    def update(self, observation: dict, action_agent: np.ndarray, action_opponent: np.ndarray):
+    def update(self, observation: dict, action_agent: np.ndarray):
         visible_mask = 1 - observation["fog_cells"] - observation["structures_in_fog"]
         
         castles_mask = observation["cities"]
         generals_mask = observation["generals"]
         mountains_mask = observation["mountains"]
+        armies = observation["armies"]
         
-        self.discovered_castles = np.maximum(self.discovered_castles, castles_mask * visible_mask)
-        self.discovered_generals = np.maximum(self.discovered_generals, generals_mask * visible_mask)
-        self.discovered_mountains = np.maximum(self.discovered_mountains, mountains_mask)
+        # Update static/semi-static features with "last seen" logic
+        self.discovered_castles = np.where(visible_mask, castles_mask, self.discovered_castles)
+        self.discovered_generals = np.where(visible_mask, generals_mask, self.discovered_generals)
+        self.discovered_mountains = np.where(visible_mask, mountains_mask, self.discovered_mountains)
         
-        self.last_seen_armies = np.where(visible_mask > 0, observation["armies"], self.last_seen_armies)
+        self.last_seen_armies = np.where(visible_mask, armies, self.last_seen_armies)
+        
+        # Update discovered city armies
+        self.discovered_city_armies = np.where(visible_mask, castles_mask * armies, self.discovered_city_armies)
         
         self.explored_cells = np.maximum(self.explored_cells, visible_mask)
         
         opponent_mask = observation["opponent_cells"]
-        self.opponent_visible_cells = np.maximum(self.opponent_visible_cells, opponent_mask)
+        self.opponent_visible_cells = np.where(visible_mask, opponent_mask, self.opponent_visible_cells)
         
-        self.action_history.append((action_agent.copy(), action_opponent.copy()))
+        # Update last seen timestep
+        current_timestep = observation["timestep"]
+        self.last_seen_timestep = np.where(visible_mask, current_timestep, self.last_seen_timestep)
+        
+        # Update action maps
+        # Decay
+        self.action_overlays *= self.decay
+        self.action_visit *= self.decay
+        
+        # Add new action
+        if action_agent[0] == 0: # Move action
+            row, col = int(action_agent[1]), int(action_agent[2])
+            direction = int(action_agent[3])
+            
+            if 0 <= row < self.grid_shape[0] and 0 <= col < self.grid_shape[1]:
+                if 0 <= direction < 4:
+                    self.action_overlays[direction, row, col] += 1.0
+                self.action_visit[row, col] += 1.0
 
     def get_memory_features(self) -> np.ndarray:
         memory_channels = [
@@ -45,26 +75,34 @@ class MemoryAugmentation:
             self.last_seen_armies,
             self.explored_cells,
             self.opponent_visible_cells,
+            self.discovered_city_armies,
+            self.last_seen_timestep,
+            self.action_visit,
         ]
         
-        for i in range(self.history_length):
-            if i < len(self.action_history):
-                agent_action, opponent_action = self.action_history[-(i+1)]
-                agent_action_map = self._action_to_map(agent_action)
-                opponent_action_map = self._action_to_map(opponent_action)
-            else:
-                agent_action_map = np.zeros(self.grid_shape, dtype=np.float32)
-                opponent_action_map = np.zeros(self.grid_shape, dtype=np.float32)
-            memory_channels.append(agent_action_map)
-            memory_channels.append(opponent_action_map)
+        # Stack everything: 8 static + 1 visit + 4 directional = 13 channels
+        # Note: action_overlays is (4, H, W), others are (H, W)
         
-        return np.stack(memory_channels, axis=0)
+        feature_list = []
+        for feat in memory_channels:
+            feature_list.append(feat)
+            
+        # Add directional overlays
+        for i in range(4):
+            feature_list.append(self.action_overlays[i])
 
-    def _action_to_map(self, action: np.ndarray) -> np.ndarray:
-        action_map = np.zeros(self.grid_shape, dtype=np.float32)
-        if action[0] == 0:
-            row, col = int(action[1]), int(action[2])
-            if 0 <= row < self.grid_shape[0] and 0 <= col < self.grid_shape[1]:
-                direction = int(action[3])
-                action_map[row, col] = direction + 1
-        return action_map
+        # Final Channels: 
+        """
+        0: discovered_castles
+        1: discovered_generals
+        2: discovered_mountains
+        3: last_seen_armies
+        4: explored_cells
+        5: opponent_visible_cells
+        6: discovered_city_armies
+        7: last_seen_timestep
+        8: action_visit
+        9-12: action_overlays (UP, DOWN, LEFT, RIGHT)
+        """
+            
+        return np.stack(feature_list, axis=0)

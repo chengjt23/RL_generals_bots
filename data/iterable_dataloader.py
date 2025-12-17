@@ -129,8 +129,8 @@ class GeneralsReplayIterableDataset(IterableDataset):
             return
         
         # Initialize memory augmentation for both players
-        memory_0 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
-        memory_1 = MemoryAugmentation((self.grid_size, self.grid_size), history_length=7)
+        memory_0 = MemoryAugmentation((self.grid_size, self.grid_size))
+        memory_1 = MemoryAugmentation((self.grid_size, self.grid_size))
         
         for move in replay['moves']:
             if len(move) < 5:
@@ -140,15 +140,14 @@ class GeneralsReplayIterableDataset(IterableDataset):
             start_tile = move[1]
             end_tile = move[2]
             is_half = move[3]
+            turn_number = move[4]
             
             obs_0 = game.agent_observation("player_0")
             obs_1 = game.agent_observation("player_1")
             
-            # Pad and cache previous observations for inference
+            # Pad observations
             obs_0.pad_observation(pad_to=self.grid_size)
             obs_1.pad_observation(pad_to=self.grid_size)
-            obs_0_prev = self._obs_to_dict(obs_0)
-            obs_1_prev = self._obs_to_dict(obs_1)
             
             start_row = start_tile // width
             start_col = start_tile % width
@@ -163,14 +162,16 @@ class GeneralsReplayIterableDataset(IterableDataset):
             action_pass = np.array([1, 0, 0, 0, 0], dtype=np.int8)
             
             # Get current memory features before taking action
-            if player_idx == 0:
-                obs_tensor = obs_0.as_tensor().astype(np.float32, copy=True)
-                memory_features = memory_0.get_memory_features().astype(np.float32, copy=True)
-                yield (obs_tensor, memory_features, action.copy(), 0)
-            else:
-                obs_tensor = obs_1.as_tensor().astype(np.float32, copy=True)
-                memory_features = memory_1.get_memory_features().astype(np.float32, copy=True)
-                yield (obs_tensor, memory_features, action.copy(), 1)
+            # Only yield sample if the player meets the star requirement
+            if replay['stars'][player_idx] >= self.min_stars:
+                if player_idx == 0:
+                    obs_tensor = obs_0.as_tensor().astype(np.float32, copy=True)
+                    memory_features = memory_0.get_memory_features().astype(np.float32, copy=True)
+                    yield (obs_tensor, memory_features, action.copy(), 0)
+                else:
+                    obs_tensor = obs_1.as_tensor().astype(np.float32, copy=True)
+                    memory_features = memory_1.get_memory_features().astype(np.float32, copy=True)
+                    yield (obs_tensor, memory_features, action.copy(), 1)
             
             actions = {
                 "player_0": np.array([1, 0, 0, 0, 0], dtype=np.int8),
@@ -182,61 +183,20 @@ class GeneralsReplayIterableDataset(IterableDataset):
             else:
                 actions["player_1"] = action
             
-            try:
-                game.step(actions)
-                
-                # Update memory augmentation after step
-                obs_0_after = game.agent_observation("player_0")
-                obs_1_after = game.agent_observation("player_1")
-                obs_0_after.pad_observation(pad_to=self.grid_size)
-                obs_1_after.pad_observation(pad_to=self.grid_size)
-                
-                # Convert observations to dict format for memory update
-                obs_0_curr = self._obs_to_dict(obs_0_after)
-                obs_1_curr = self._obs_to_dict(obs_1_after)
-                
-                # Infer opponent actions
-                opp_action_for_0 = self._infer_opponent_action(obs_0_prev, obs_0_curr)
-                opp_action_for_1 = self._infer_opponent_action(obs_1_prev, obs_1_curr)
-                
-                memory_0.update(obs_0_curr, actions["player_0"], opp_action_for_0)
-                memory_1.update(obs_1_curr, actions["player_1"], opp_action_for_1)
-            except Exception:
-                break
-
-    def _infer_opponent_action(self, prev: dict, curr: dict) -> np.ndarray:
-        """Heuristic opponent action inference matching SOTAAgent."""
-        fog = curr['fog_cells']
-        sif = curr['structures_in_fog']
-        visible = (fog == 0) & (sif == 0)
-
-        prev_opp = prev['opponent_cells']
-        cur_opp = curr['opponent_cells']
-
-        # Newly visible opponent-owned cells (candidate destination).
-        new_opp = visible & (cur_opp.astype(bool)) & (~prev_opp.astype(bool))
-        new_positions = np.argwhere(new_opp)
-        
-        # Default to PASS
-        action = np.array([1, 0, 0, 0, 0], dtype=np.int8)
-
-        if new_positions.shape[0] != 1:
-            return action
-
-        dest_r, dest_c = (int(new_positions[0][0]), int(new_positions[0][1]))
-
-        # Candidate sources: adjacent cells that were opponent-owned previously.
-        for direction, (dr, dc) in enumerate([(-1, 0), (1, 0), (0, -1), (0, 1)]):
-            src_r, src_c = dest_r - dr, dest_c - dc
-            if src_r < 0 or src_c < 0 or src_r >= self.grid_size or src_c >= self.grid_size:
-                continue
-            if prev_opp[src_r, src_c] == 1:
-                # Found a plausible source
-                # Action format: [pass, row, col, direction, split]
-                # to_pass=False -> 0
-                return np.array([0, src_r, src_c, direction, 0], dtype=np.int8)
-
-        return action
+            game.step(actions)
+            
+            # Update memory augmentation after step
+            obs_0_after = game.agent_observation("player_0")
+            obs_1_after = game.agent_observation("player_1")
+            obs_0_after.pad_observation(pad_to=self.grid_size)
+            obs_1_after.pad_observation(pad_to=self.grid_size)
+            
+            # Convert observations to dict format for memory update
+            obs_0_curr = self._obs_to_dict(obs_0_after)
+            obs_1_curr = self._obs_to_dict(obs_1_after)
+            
+            memory_0.update(obs_0_curr, actions["player_0"])
+            memory_1.update(obs_1_curr, actions["player_1"])
     
     def _create_initial_grid(self, replay: Dict, height: int, width: int) -> Grid:
         grid_array = np.full((height, width), '.', dtype='U1')
