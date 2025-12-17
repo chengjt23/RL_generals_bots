@@ -25,7 +25,7 @@ data:
   grid_size: 24
   min_stars: 70
   max_turns: 500
-  max_replays: 10
+  max_replays: 18803
   train_split: 0.95
 
 model:
