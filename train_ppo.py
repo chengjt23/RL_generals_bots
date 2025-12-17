@@ -15,6 +15,7 @@ from agents.parallel_envs import ParallelEnvs
 from agents.reward_shaping import PotentialBasedRewardFn
 from generals.agents import RandomAgent
 from generals.core.observation import Observation
+from generals.core.action import Action
 
 try:
     import wandb
@@ -175,17 +176,35 @@ class PPOTrainer:
         episode_results = []
         prior_observations = [obs_dict["Agent"] for obs_dict in obs_dicts]
         
+        # Track last actions and observation snapshots for memory updates
+        agent_last_actions = [None] * n_envs
+        agent_prev_obs_snapshots = [None] * n_envs
+        
         for step in range(n_steps):
             observations = [obs_dicts[env_idx]["Agent"] for env_idx in range(n_envs)]
             
+            # Infer opponent actions for memory update
+            opponent_last_actions = []
+            for env_idx in range(n_envs):
+                obs = observations[env_idx]
+                if agent_prev_obs_snapshots[env_idx] is not None:
+                    opp_action = self.agent._infer_opponent_action(agent_prev_obs_snapshots[env_idx], obs)
+                else:
+                    opp_action = Action(to_pass=True)
+                opponent_last_actions.append(opp_action)
+            
             agent_actions, agent_log_probs, agent_values = self.agent.act_with_value_batch(
-                observations, self.agent_memories
+                observations, 
+                self.agent_memories,
+                prev_obs_snapshots=agent_prev_obs_snapshots,
+                last_actions=agent_last_actions,
+                opponent_last_actions=opponent_last_actions
             )
             
             obs_tensors = []
             memory_tensors = []
             for env_idx in range(n_envs):
-                obs_tensor = torch.from_numpy(observations[env_idx].as_tensor()).float().numpy()
+                obs_tensor = observations[env_idx].as_tensor().astype(np.float32)
                 memory_tensor = self.agent_memories[env_idx].get_memory_features()
                 obs_tensors.append(obs_tensor)
                 memory_tensors.append(memory_tensor)
@@ -203,6 +222,9 @@ class PPOTrainer:
 
             next_obs_dicts, rewards_dicts, dones, next_infos = self.envs.step(agent_actions, opponent_actions)
 
+            # Track which environments were reset in this step
+            reset_envs = set()
+            
             for env_idx in range(n_envs):
                 reward = self.reward_fn(
                     prior_observations[env_idx],
@@ -221,7 +243,8 @@ class PPOTrainer:
                     agent_log_probs[env_idx],
                     agent_values[env_idx],
                     reward,
-                    float(dones[env_idx])
+                    float(dones[env_idx]),
+                    observation_obj=observations[env_idx]  # Store Observation object for accurate log_prob calculation
                 )
                 
                 episode_rewards[env_idx] += reward
@@ -254,12 +277,26 @@ class PPOTrainer:
                         opponent_memories[env_idx] = None
                     
                     self.agent_memories[env_idx].reset()
+                    agent_last_actions[env_idx] = None
+                    agent_prev_obs_snapshots[env_idx] = None
                     
                     episode_steps[env_idx] = 0
                     episode_rewards[env_idx] = 0.0
+                    
+                    reset_envs.add(env_idx)  # Mark this environment as reset
             
             obs_dicts = next_obs_dicts
             prior_observations = [obs_dict["Agent"] for obs_dict in obs_dicts]
+            
+            # Update last actions and observation snapshots for next step
+            # Note: Skip environments that were reset (they already have None set)
+            for env_idx in range(n_envs):
+                if env_idx not in reset_envs:
+                    # Environment didn't reset, update with current step's action and next observation
+                    agent_last_actions[env_idx] = agent_actions[env_idx]
+                    # Use next observation (after step) for snapshot, used to infer opponent action in next step
+                    agent_prev_obs_snapshots[env_idx] = self.agent._snapshot_observation(prior_observations[env_idx])
+                # If reset, last_actions and prev_obs_snapshots remain None (already set above)
         
         last_observations = [obs_dicts[env_idx]["Agent"] for env_idx in range(n_envs)]
         
@@ -279,6 +316,9 @@ class PPOTrainer:
         with torch.no_grad():
             _, values_batch = self.agent.network(obs_batch, memory_batch)
         last_values = values_batch.squeeze(-1).cpu().numpy()
+        
+        last_step_dones = self.buffer.dones[self.buffer.n_steps - 1]
+        last_values = last_values * (1.0 - last_step_dones)
         
         self.buffer.finish_trajectory(
             last_values,
@@ -311,8 +351,11 @@ class PPOTrainer:
                 old_values = batch['values']
                 advantages = batch['advantages']
                 returns = batch['returns']
+                observation_objects = batch.get('observation_objects', None)  # Get Observation objects if available
                 
-                new_log_probs, new_values, entropies = self.agent.evaluate_actions(obs, mem, actions)
+                new_log_probs, new_values, entropies = self.agent.evaluate_actions(
+                    obs, mem, actions, observations=observation_objects
+                )
                 
                 if torch.any(torch.isnan(new_log_probs)) or torch.any(torch.isinf(new_log_probs)):
                     raise ValueError("NaN or Inf detected in new_log_probs")

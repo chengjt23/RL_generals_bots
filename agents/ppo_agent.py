@@ -112,8 +112,47 @@ class PPOAgent(Agent):
         
         return action, log_prob, value.item()
     
-    def act_with_value_batch(self, observations, memories):
+    def act_with_value_batch(self, observations, memories, prev_obs_snapshots=None, last_actions=None, opponent_last_actions=None):
+        """
+        Batch version of act_with_value that processes multiple observations.
+        
+        Args:
+            observations: List of Observation objects
+            memories: List of MemoryAugmentation objects (will be updated in-place)
+            prev_obs_snapshots: Optional list of previous observation snapshots for opponent action inference
+            last_actions: Optional list of last actions for memory update
+            opponent_last_actions: Optional list of opponent's last actions for memory update
+        
+        Returns:
+            actions: List of Action objects
+            log_probs: List of log probabilities (float)
+            values: List of state values (float)
+        """
         batch_size = len(observations)
+        
+        # Update memories before forward pass
+        # Note: opponent_last_actions should already be inferred in collect_trajectories
+        if last_actions is not None:
+            for i in range(batch_size):
+                memory = memories[i]
+                last_action = last_actions[i]
+                
+                # Use provided opponent_last_actions if available, otherwise infer
+                if opponent_last_actions is not None and i < len(opponent_last_actions):
+                    opponent_action = opponent_last_actions[i]
+                elif prev_obs_snapshots is not None and prev_obs_snapshots[i] is not None:
+                    # Fallback: infer opponent action if not provided
+                    opponent_action = self._infer_opponent_action(prev_obs_snapshots[i], observations[i])
+                else:
+                    opponent_action = Action(to_pass=True)
+                
+                # Update memory with current observation and previous actions
+                if last_action is not None:
+                    memory.update(
+                        self._obs_to_dict(observations[i]),
+                        np.asarray(last_action, dtype=np.int8),
+                        np.asarray(opponent_action, dtype=np.int8),
+                    )
         
         obs_tensors = []
         memory_tensors = []
@@ -159,7 +198,22 @@ class PPOAgent(Agent):
         
         return value.squeeze(0).item()
     
-    def evaluate_actions(self, obs_batch, memory_batch, action_batch):
+    def evaluate_actions(self, obs_batch, memory_batch, action_batch, observations=None):
+        """
+        Evaluate actions and compute log_probs, values, and entropies.
+        
+        Args:
+            obs_batch: Observation tensors (B, C, H, W)
+            memory_batch: Memory tensors (B, M, H, W)
+            action_batch: Action tensors (B, 5) - [pass, row, col, direction, split]
+            observations: Optional list of Observation objects for computing valid masks.
+                         If None, will use simplified calculation (less accurate but faster).
+        
+        Returns:
+            log_probs: (B,) tensor of log probabilities
+            values: (B,) tensor of state values
+            entropies: (B,) tensor of action entropies
+        """
         policy_logits, values = self.network(obs_batch, memory_batch)
         
         batch_size = obs_batch.shape[0]
@@ -175,26 +229,97 @@ class PPOAgent(Agent):
             pass_flag = action[0].item()
             pass_logit = logits[0, 0, 0]
             
-            if pass_flag == 1:
-                all_logits = torch.stack([pass_logit])
-                probs = F.softmax(all_logits, dim=0)
-                log_probs_tensor = F.log_softmax(all_logits, dim=0)
-                log_prob = log_probs_tensor[0]
-                entropy = -(probs * log_probs_tensor).sum()
+            if observations is not None and i < len(observations):
+                # Use full valid actions distribution (consistent with _sample_action_with_log_prob)
+                obs = observations[i]
+                valid_mask = compute_valid_move_mask(obs)
+                
+                logits_np = logits.cpu().numpy()
+                action_logits = logits_np[1:9].reshape(4, 2, h, w)
+                
+                masked_logits = []
+                valid_actions = []
+                
+                for direction in range(4):
+                    for split in range(2):
+                        logits_slice = action_logits[direction, split]
+                        mask_slice = valid_mask[:, :, direction]
+                        
+                        valid_positions = np.argwhere(mask_slice > 0)
+                        for pos in valid_positions:
+                            row, col = pos
+                            masked_logits.append(logits_slice[row, col])
+                            valid_actions.append((row, col, direction, split))
+                
+                if len(masked_logits) == 0:
+                    # No valid actions, must pass
+                    all_logits = torch.tensor([pass_logit.item()], device=logits.device)
+                    probs = F.softmax(all_logits, dim=0)
+                    log_probs_tensor = F.log_softmax(all_logits, dim=0)
+                    log_prob = log_probs_tensor[0] if pass_flag == 1 else torch.tensor(-1e8, device=logits.device)
+                    entropy = -(probs * log_probs_tensor).sum()
+                else:
+                    # Find the chosen action in valid actions
+                    row = action[1].item()
+                    col = action[2].item()
+                    direction = action[3].item()
+                    split = action[4].item()
+                    
+                    if pass_flag == 1:
+                        chosen_idx = 0
+                    else:
+                        # Find index of chosen action in valid_actions
+                        chosen_idx = None
+                        for idx, (r, c, d, s) in enumerate(valid_actions):
+                            if r == row and c == col and d == direction and s == split:
+                                chosen_idx = idx + 1  # +1 because pass is at index 0
+                                break
+                        
+                        if chosen_idx is None:
+                            # Action not in valid actions (shouldn't happen, but handle gracefully)
+                            # Use simplified calculation as fallback
+                            action_idx = 1 + direction * 2 + split
+                            action_logit = logits[action_idx, row, col]
+                            all_logits = torch.stack([pass_logit, action_logit])
+                            probs = F.softmax(all_logits, dim=0)
+                            log_probs_tensor = F.log_softmax(all_logits, dim=0)
+                            log_prob = log_probs_tensor[1]
+                            entropy = -(probs * log_probs_tensor).sum()
+                            log_probs.append(log_prob)
+                            entropies.append(entropy)
+                            continue
+                    
+                    # Build full logits array: [pass_logit, ...valid_action_logits...]
+                    all_logits_np = np.array([pass_logit.item()] + masked_logits)
+                    all_logits = torch.from_numpy(all_logits_np).to(logits.device)
+                    
+                    probs = F.softmax(all_logits, dim=0)
+                    log_probs_tensor = F.log_softmax(all_logits, dim=0)
+                    log_prob = log_probs_tensor[chosen_idx]
+                    entropy = -(probs * log_probs_tensor).sum()
             else:
-                row = action[1].item()
-                col = action[2].item()
-                direction = action[3].item()
-                split = action[4].item()
-                
-                action_idx = 1 + direction * 2 + split
-                action_logit = logits[action_idx, row, col]
-                
-                all_logits = torch.stack([pass_logit, action_logit])
-                probs = F.softmax(all_logits, dim=0)
-                log_probs_tensor = F.log_softmax(all_logits, dim=0)
-                log_prob = log_probs_tensor[1]
-                entropy = -(probs * log_probs_tensor).sum()
+                # Simplified calculation (fallback when observations not provided)
+                # This is less accurate but faster
+                if pass_flag == 1:
+                    all_logits = torch.stack([pass_logit])
+                    probs = F.softmax(all_logits, dim=0)
+                    log_probs_tensor = F.log_softmax(all_logits, dim=0)
+                    log_prob = log_probs_tensor[0]
+                    entropy = -(probs * log_probs_tensor).sum()
+                else:
+                    row = action[1].item()
+                    col = action[2].item()
+                    direction = action[3].item()
+                    split = action[4].item()
+                    
+                    action_idx = 1 + direction * 2 + split
+                    action_logit = logits[action_idx, row, col]
+                    
+                    all_logits = torch.stack([pass_logit, action_logit])
+                    probs = F.softmax(all_logits, dim=0)
+                    log_probs_tensor = F.log_softmax(all_logits, dim=0)
+                    log_prob = log_probs_tensor[1]
+                    entropy = -(probs * log_probs_tensor).sum()
             
             log_probs.append(log_prob)
             entropies.append(entropy)
