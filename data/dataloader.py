@@ -225,6 +225,12 @@ class GeneralsReplayDataset(Dataset):
             'opponent_cells': tensor[6],
             'fog_cells': tensor[7],
             'structures_in_fog': tensor[8],
+            'owned_land_count': tensor[9],
+            'owned_army_count': tensor[10],
+            'opponent_land_count': tensor[11],
+            'opponent_army_count': tensor[12],
+            'timestep': tensor[13],
+            'priority': tensor[14],
         }
     
     def __len__(self) -> int:
