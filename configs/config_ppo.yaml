@@ -27,10 +27,10 @@ training:
   learning_rate: 0.0003
   max_grad_norm: 0.5
   
-  warmup_iterations: 100
-  eval_frequency: 50
-  save_frequency: 100
-  log_frequency: 10
+  warmup_iterations: 0
+  eval_frequency: 25
+  save_frequency: 50
+  log_frequency: 5
   
   max_episode_steps: 1000
   
@@ -43,12 +43,12 @@ opponent_pool:
   k_factor: 32
   temperature: 0.5
   update_freq: 50
-  warmup_iterations: 100
+  warmup_iterations: 0
 
 reward:
-  land_weight: 0.4
-  army_weight: 0.4
-  castle_weight: 0.2
+  land_weight: 0.3
+  army_weight: 0.3
+  castle_weight: 0.4
   max_ratio: 100.0
   gamma: 0.99
 
@@ -57,7 +57,7 @@ multi_gpu:
   strategy: ddp
 
 logging:
-  use_wandb: false
+  use_wandb: true
   project_name: generals-rl-ppo
   wandb_entity: null
 

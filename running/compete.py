@@ -8,7 +8,7 @@ import numpy as np
 import yaml
 from pathlib import Path
 from tqdm import tqdm
-from agents.sac_agent import SACAgent
+from agents.ppo_agent import PPOAgent
 from agents.sota_agent import SOTAAgent
 from generals.envs import PettingZooGenerals
 import imageio
@@ -22,9 +22,49 @@ except ImportError:
     print("Warning: pygame or PIL not available, video recording disabled")
 
 
-def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbose: bool = False, save_video: bool = False, video_dir: str = "videos", max_steps: int = 1000):
+def compete(
+    ppo_checkpoint: str = None,
+    ppo_checkpoint2: str = None,
+    bc_model_path: str = None,
+    num_games: int = 100,
+    verbose: bool = False,
+    save_video: bool = False,
+    video_dir: str = "videos",
+    max_steps: int = 1000,
+    mode: str = "ppo_vs_bc"
+):
+    """
+    Competition between agents.
+    
+    Args:
+        ppo_checkpoint: Path to PPO checkpoint (required for ppo_vs_bc or ppo_vs_ppo)
+        ppo_checkpoint2: Path to second PPO checkpoint (required for ppo_vs_ppo)
+        bc_model_path: Path to BC model (required for ppo_vs_bc)
+        num_games: Number of games to play
+        verbose: Print result for every game
+        save_video: Save each game as MP4 video
+        video_dir: Directory to save videos
+        max_steps: Maximum steps per game
+        mode: "ppo_vs_bc" or "ppo_vs_ppo"
+    """
+    # Validate arguments
+    if mode == "ppo_vs_bc":
+        if ppo_checkpoint is None or bc_model_path is None:
+            raise ValueError("ppo_vs_bc mode requires both ppo_checkpoint and bc_model_path")
+        title = "PPO Agent vs BC Model Competition"
+        agent1_name = "PPO"
+        agent2_name = "BC"
+    elif mode == "ppo_vs_ppo":
+        if ppo_checkpoint is None or ppo_checkpoint2 is None:
+            raise ValueError("ppo_vs_ppo mode requires both ppo_checkpoint and ppo_checkpoint2")
+        title = "PPO Agent vs PPO Agent Competition"
+        agent1_name = "PPO1"
+        agent2_name = "PPO2"
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Must be 'ppo_vs_bc' or 'ppo_vs_ppo'")
+    
     print("\n" + "="*70)
-    print("SAC Agent vs BC Model Competition")
+    print(title)
     print("="*70)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -40,43 +80,61 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
         videos_dir.mkdir(exist_ok=True)
     
     print(f"\nLoading models...")
-    sac_agent = SACAgent(
-        id="SAC",
-        grid_size=24,
-        device=device,
-        model_path=sac_checkpoint,
-        memory_channels=20
-    )
-    sac_agent.actor.eval()
-    print(f"  SAC Agent loaded from: {sac_checkpoint}")
     
-    bc_config = {
+    # Common config
+    agent_config = {
         'grid_size': 24,
         'obs_channels': 15,
         'memory_channels': 20,
         'base_channels': 64
     }
-    bc_agent = SOTAAgent(
-        sota_config=bc_config,
-        id="BC",
+    
+    # Load agent 1 (PPO)
+    agent1 = PPOAgent(
+        sota_config=agent_config,
+        id=agent1_name,
         grid_size=24,
         device=device,
-        model_path=bc_model_path,
+        model_path=ppo_checkpoint,
         memory_channels=20
     )
-    print(f"  BC Agent loaded from: {bc_model_path}")
+    agent1.network.eval()
+    print(f"  {agent1_name} Agent loaded from: {ppo_checkpoint}")
+    
+    # Load agent 2 (BC or PPO)
+    if mode == "ppo_vs_bc":
+        agent2 = SOTAAgent(
+            sota_config=agent_config,
+            id=agent2_name,
+            grid_size=24,
+            device=device,
+            model_path=bc_model_path,
+            memory_channels=20
+        )
+        print(f"  {agent2_name} Agent loaded from: {bc_model_path}")
+    else:  # ppo_vs_ppo
+        agent2 = PPOAgent(
+            sota_config=agent_config,
+            id=agent2_name,
+            grid_size=24,
+            device=device,
+            model_path=ppo_checkpoint2,
+            memory_channels=20
+        )
+        agent2.network.eval()
+        print(f"  {agent2_name} Agent loaded from: {ppo_checkpoint2}")
     
     render_mode = "human" if record_videos else None
     if render_mode == "human":
         os.environ["SDL_VIDEODRIVER"] = "dummy"
         import pygame
     
-    env = PettingZooGenerals(agents=["SAC", "BC"], render_mode=render_mode)
+    env = PettingZooGenerals(agents=[agent1_name, agent2_name], render_mode=render_mode)
     
-    sac_wins = 0
-    bc_wins = 0
-    sac_rewards = []
-    bc_rewards = []
+    agent1_wins = 0
+    agent2_wins = 0
+    agent1_rewards = []
+    agent2_rewards = []
     game_lengths = []
     
     print(f"\nStarting {num_games} games...")
@@ -86,12 +144,12 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
     
     for game_num in range(num_games):
         obs_dict, info = env.reset()
-        sac_agent.reset()
-        bc_agent.reset()
+        agent1.reset()
+        agent2.reset()
         
         terminated = truncated = False
-        sac_episode_reward = 0
-        bc_episode_reward = 0
+        agent1_episode_reward = 0
+        agent2_episode_reward = 0
         step = 0
         
         recording = record_videos
@@ -101,20 +159,23 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
                    leave=False, disable=(not verbose and (game_num + 1) % 10 != 0))
         
         while not (terminated or truncated) and step < max_steps:
-            # print(step)
-            sac_action = sac_agent.act(obs_dict["SAC"], deterministic=True)
-            bc_action = bc_agent.act(obs_dict["BC"])
-            actions_dict = {"SAC": sac_action, "BC": bc_action}
+            agent1_action = agent1.act(obs_dict[agent1_name], deterministic=True)
+            # SOTAAgent doesn't accept deterministic parameter, only PPOAgent does
+            if mode == "ppo_vs_ppo":
+                agent2_action = agent2.act(obs_dict[agent2_name], deterministic=True)
+            else:
+                agent2_action = agent2.act(obs_dict[agent2_name])
+            actions_dict = {agent1_name: agent1_action, agent2_name: agent2_action}
             
             obs_dict, rewards_dict, terminated, truncated, info = env.step(actions_dict)
-            sac_episode_reward += rewards_dict["SAC"]
-            bc_episode_reward += rewards_dict["BC"]
+            agent1_episode_reward += rewards_dict[agent1_name]
+            agent2_episode_reward += rewards_dict[agent2_name]
             step += 1
             
             pbar.update(1)
             pbar.set_postfix({
-                'SAC_r': f'{sac_episode_reward:.1f}',
-                'BC_r': f'{bc_episode_reward:.1f}'
+                f'{agent1_name}_r': f'{agent1_episode_reward:.1f}',
+                f'{agent2_name}_r': f'{agent2_episode_reward:.1f}'
             })
             
             if recording:
@@ -133,23 +194,23 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
         pbar.close()
         
         game_lengths.append(step)
-        sac_rewards.append(sac_episode_reward)
-        bc_rewards.append(bc_episode_reward)
+        agent1_rewards.append(agent1_episode_reward)
+        agent2_rewards.append(agent2_episode_reward)
         
-        if rewards_dict["SAC"] > rewards_dict["BC"]:
-            sac_wins += 1
-            result = "SAC WIN"
-        elif rewards_dict["BC"] > rewards_dict["SAC"]:
-            bc_wins += 1
-            result = "BC WIN"
+        if rewards_dict[agent1_name] > rewards_dict[agent2_name]:
+            agent1_wins += 1
+            result = f"{agent1_name} WIN"
+        elif rewards_dict[agent2_name] > rewards_dict[agent1_name]:
+            agent2_wins += 1
+            result = f"{agent2_name} WIN"
         else:
             result = "DRAW"
         
         if verbose or (game_num + 1) % 10 == 0:
-            print(f"Game {game_num + 1:3d}/{num_games}: {result:8s} | "
+            print(f"Game {game_num + 1:3d}/{num_games}: {result:12s} | "
                   f"Steps: {step:4d} | "
-                  f"SAC reward: {sac_episode_reward:6.1f} | "
-                  f"BC reward: {bc_episode_reward:6.1f}")
+                  f"{agent1_name} reward: {agent1_episode_reward:6.1f} | "
+                  f"{agent2_name} reward: {agent2_episode_reward:6.1f}")
     
         env.close()
     
@@ -163,12 +224,12 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
                 print(f"✗ Failed to save video for game {game_num + 1}: {e}")
     
     total_games = num_games
-    draws = total_games - sac_wins - bc_wins
-    sac_win_rate = sac_wins / total_games * 100
-    bc_win_rate = bc_wins / total_games * 100
+    draws = total_games - agent1_wins - agent2_wins
+    agent1_win_rate = agent1_wins / total_games * 100
+    agent2_win_rate = agent2_wins / total_games * 100
     
-    avg_sac_reward = sum(sac_rewards) / total_games
-    avg_bc_reward = sum(bc_rewards) / total_games
+    avg_agent1_reward = sum(agent1_rewards) / total_games
+    avg_agent2_reward = sum(agent2_rewards) / total_games
     avg_game_length = sum(game_lengths) / total_games
     
     print("\n" + "="*70)
@@ -176,44 +237,49 @@ def compete(sac_checkpoint: str, bc_model_path: str, num_games: int = 100, verbo
     print("="*70)
     print(f"\nTotal Games: {total_games}")
     print(f"\nWin Statistics:")
-    print(f"  SAC Agent:   {sac_wins:3d} wins  ({sac_win_rate:5.1f}%)")
-    print(f"  BC Model:    {bc_wins:3d} wins  ({bc_win_rate:5.1f}%)")
+    print(f"  {agent1_name} Agent:   {agent1_wins:3d} wins  ({agent1_win_rate:5.1f}%)")
+    print(f"  {agent2_name} Agent:   {agent2_wins:3d} wins  ({agent2_win_rate:5.1f}%)")
     print(f"  Draws:       {draws:3d}       ({draws/total_games*100:5.1f}%)")
     print(f"\nAverage Rewards:")
-    print(f"  SAC Agent:   {avg_sac_reward:7.2f}")
-    print(f"  BC Model:    {avg_bc_reward:7.2f}")
-    print(f"  Difference:  {avg_sac_reward - avg_bc_reward:+7.2f} (SAC advantage)")
+    print(f"  {agent1_name} Agent:   {avg_agent1_reward:7.2f}")
+    print(f"  {agent2_name} Agent:   {avg_agent2_reward:7.2f}")
+    print(f"  Difference:  {avg_agent1_reward - avg_agent2_reward:+7.2f} ({agent1_name} advantage)")
     print(f"\nAverage Game Length: {avg_game_length:.1f} steps")
     
-    if sac_win_rate > 55:
-        print(f"\n🎉 SAC Agent dominates with {sac_win_rate:.1f}% win rate!")
-    elif sac_win_rate > 50:
-        print(f"\n✓ SAC Agent has a slight advantage with {sac_win_rate:.1f}% win rate")
-    elif sac_win_rate > 45:
-        print(f"\n⚖ Very close match! SAC: {sac_win_rate:.1f}% vs BC: {bc_win_rate:.1f}%")
+    if agent1_win_rate > 55:
+        print(f"\n🎉 {agent1_name} Agent dominates with {agent1_win_rate:.1f}% win rate!")
+    elif agent1_win_rate > 50:
+        print(f"\n✓ {agent1_name} Agent has a slight advantage with {agent1_win_rate:.1f}% win rate")
+    elif agent1_win_rate > 45:
+        print(f"\n⚖ Very close match! {agent1_name}: {agent1_win_rate:.1f}% vs {agent2_name}: {agent2_win_rate:.1f}%")
     else:
-        print(f"\n⚠ BC Model is stronger with {bc_win_rate:.1f}% win rate")
+        print(f"\n⚠ {agent2_name} Agent is stronger with {agent2_win_rate:.1f}% win rate")
     
     print("="*70 + "\n")
     
     return {
-        'sac_wins': sac_wins,
-        'bc_wins': bc_wins,
+        'agent1_wins': agent1_wins,
+        'agent2_wins': agent2_wins,
         'draws': draws,
-        'sac_win_rate': sac_win_rate,
-        'bc_win_rate': bc_win_rate,
-        'avg_sac_reward': avg_sac_reward,
-        'avg_bc_reward': avg_bc_reward,
-        'avg_game_length': avg_game_length
+        'agent1_win_rate': agent1_win_rate,
+        'agent2_win_rate': agent2_win_rate,
+        'avg_agent1_reward': avg_agent1_reward,
+        'avg_agent2_reward': avg_agent2_reward,
+        'avg_game_length': avg_game_length,
+        'mode': mode
     }
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='SAC Agent vs BC Model Competition')
-    parser.add_argument('--sac_checkpoint', type=str, required=True, 
-                       help='Path to SAC checkpoint file')
-    parser.add_argument('--bc_model', type=str, required=True,
-                       help='Path to BC model file')
+    parser = argparse.ArgumentParser(description='PPO Agent Competition (PPO vs BC or PPO vs PPO)')
+    parser.add_argument('--ppo_checkpoint', type=str, default=None,
+                       help='Path to first PPO checkpoint file (required)')
+    parser.add_argument('--ppo_checkpoint2', type=str, default=None,
+                       help='Path to second PPO checkpoint file (required for ppo_vs_ppo mode)')
+    parser.add_argument('--bc_model', type=str, default=None,
+                       help='Path to BC model file (required for ppo_vs_bc mode)')
+    parser.add_argument('--mode', type=str, default='ppo_vs_bc', choices=['ppo_vs_bc', 'ppo_vs_ppo'],
+                       help='Competition mode: ppo_vs_bc or ppo_vs_ppo (default: ppo_vs_bc)')
     parser.add_argument('--num_games', type=int, default=100,
                        help='Number of games to play (default: 100)')
     parser.add_argument('--max_steps', type=int, default=1000,
@@ -227,12 +293,14 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     compete(
-        sac_checkpoint=args.sac_checkpoint,
+        ppo_checkpoint=args.ppo_checkpoint,
+        ppo_checkpoint2=args.ppo_checkpoint2,
         bc_model_path=args.bc_model,
         num_games=args.num_games,
         verbose=args.verbose,
         save_video=args.save_video,
         video_dir=args.video_dir,
-        max_steps=args.max_steps
+        max_steps=args.max_steps,
+        mode=args.mode
     )
 
