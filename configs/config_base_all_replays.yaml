@@ -1,8 +1,8 @@
 training:
-  batch_size: 256
-  learning_rate: 0.0004
-  num_epochs: 500
-  steps_per_epoch: 20000
+  batch_size: 1024
+  learning_rate: 0.0003
+  num_epochs: 100
+  steps_per_epoch: 1000
   gradient_clip: 1.0
   warmup_steps: 1000
   weight_decay: 0.0001
@@ -24,13 +24,13 @@ data:
   data_dir: data/generals_io_replays
   grid_size: 24
   min_stars: 70
-  max_turns: 500
+  max_turns: 50000
   max_replays: 18803
   train_split: 0.95
 
 model:
   obs_channels: 15
-  memory_channels: 0
+  memory_channels: 18
   base_channels: 64
   grid_size: 24
 
@@ -45,7 +45,7 @@ scheduler:
   min_lr: 1.0e-6
 
 logging:
-  experiment_name: behavior_cloning
+  experiment_name: bc_all_replays
   save_dir: experiments
   tensorboard: true
   use_wandb: true

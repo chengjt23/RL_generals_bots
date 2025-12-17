@@ -15,7 +15,7 @@ from data.iterable_dataloader import create_iterable_dataloader
 from agents.network import SOTANetwork
 
 try:
-    import wandb
+    import swanlab as wandb
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
@@ -82,8 +82,8 @@ class BehaviorCloningTrainer:
                 dir=str(self.exp_dir),
                 tags=self.config['logging'].get('wandb_tags', []),
             )
-            wandb.watch(self.model, log='all', log_freq=100)
-            print(f"Wandb initialized: {wandb.run.url}")
+            # wandb.watch(self.model, log='all', log_freq=100)
+            # print(f"Wandb initialized: {wandb.run.url}")
         else:
             if not WANDB_AVAILABLE:
                 print("Wandb not available (not installed)")
@@ -430,7 +430,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='/root/oyx_fork/configs/config_base.yaml',
+        default='/root/shared-nvme/oyx/RL_generals_bots/configs/config_base.yaml',
         help='Path to config file'
     )
     args = parser.parse_args()
