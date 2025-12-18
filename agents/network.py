@@ -86,8 +86,9 @@ class ConvBlock(nn.Module):
 
 class UNetBackbone(nn.Module):
     """U-Net backbone with residual blocks and skip connections"""
-    def __init__(self, in_channels: int, base_channels: int = 64):
+    def __init__(self, in_channels: int, base_channels: int = 64, dropout: float = 0.0):
         super().__init__()
+        self.dropout = nn.Dropout2d(dropout) if dropout > 0 else nn.Identity()
         
         # Encoder with residual blocks (3 levels for 24x24 grid)
         self.enc1 = nn.Sequential(
@@ -177,7 +178,10 @@ class UNetBackbone(nn.Module):
         outputs = []
         
         for t in range(T):
-            h, c = self.conv_lstm(bottleneck_seq[:, t], (h, c))
+            # Apply dropout to input features before LSTM
+            # This forces the LSTM to rely on its hidden state (memory) when features are dropped
+            input_t = self.dropout(bottleneck_seq[:, t])
+            h, c = self.conv_lstm(input_t, (h, c))
             outputs.append(h)
             
         # Stack outputs: (B, T, C, H, W)
@@ -248,11 +252,11 @@ class ValueHead(nn.Module):
 
 
 class SOTANetwork(nn.Module):
-    def __init__(self, obs_channels: int = 15, memory_channels: int = 18, grid_size: int = 24, base_channels: int = 64):
+    def __init__(self, obs_channels: int = 15, memory_channels: int = 18, grid_size: int = 24, base_channels: int = 64, dropout: float = 0.0):
         super().__init__()
         self.memory_channels = memory_channels
         total_channels = obs_channels + memory_channels
-        self.backbone = UNetBackbone(total_channels, base_channels)
+        self.backbone = UNetBackbone(total_channels, base_channels, dropout=dropout)
         self.policy_head = PolicyHead(base_channels, grid_size)
         self.value_head = ValueHead(base_channels, grid_size)
     

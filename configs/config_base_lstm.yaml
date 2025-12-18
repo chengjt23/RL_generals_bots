@@ -14,6 +14,7 @@ training:
   device: cuda
   num_workers: 24
   mixed_precision: true
+  lstm_dropout: 0.2  # Dropout applied to input of LSTM to force memory usage
 
   early_stopping:
     enabled: true

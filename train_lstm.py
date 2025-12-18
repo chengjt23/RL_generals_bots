@@ -59,11 +59,15 @@ class LSTMOnlyTrainer:
     
     def setup_model(self):
         model_config = self.config['model']
+        dropout = self.config['training'].get('lstm_dropout', 0.0)
+        print(f"Initializing model with LSTM dropout: {dropout}")
+        
         self.model = SOTANetwork(
             obs_channels=model_config['obs_channels'],
             memory_channels=model_config['memory_channels'],
             grid_size=model_config['grid_size'],
             base_channels=model_config['base_channels'],
+            dropout=dropout
         ).to(self.device)
         
         # Load checkpoint
@@ -104,13 +108,21 @@ class LSTMOnlyTrainer:
 
         print(f"Successfully loaded backbone weights.")
         
-        # Freeze everything except LSTM
+        # Freeze Encoder and Bottleneck. Unfreeze LSTM, Decoder, and Heads.
+        # We want the downstream layers to adapt to the new LSTM representations.
+        frozen_prefixes = ['backbone.enc', 'backbone.bottleneck']
+        
         for name, param in self.model.named_parameters():
-            if 'conv_lstm' in name:
-                param.requires_grad = True
-                print(f"Unfrozen: {name}")
-            else:
+            should_freeze = any(name.startswith(prefix) for prefix in frozen_prefixes)
+            
+            if should_freeze:
                 param.requires_grad = False
+            else:
+                param.requires_grad = True
+                # print(f"Unfrozen: {name}") # Commented out to avoid spam
+        
+        print("Frozen modules: Encoder, Bottleneck")
+        print("Unfrozen modules: ConvLSTM, Decoder, PolicyHead, ValueHead")
         
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
