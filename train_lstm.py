@@ -406,26 +406,27 @@ class LSTMOnlyTrainer:
             self.global_step += 1
             
             # Logging
-            total_loss += step_loss_accum
+            # Normalize loss to be per-sample (average over the effective batch)
+            mean_step_loss = step_loss_accum / accumulation_steps
+            
+            total_loss += mean_step_loss
             avg_loss = total_loss / (step + 1)
             
             pbar.set_postfix({
-                'loss': f"{step_loss_accum:.4f}",
+                'loss': f"{mean_step_loss:.4f}",
                 'avg_loss': f"{avg_loss:.4f}",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
                 wandb.log({
-                    'train/loss': step_loss_accum,
+                    'train/loss': mean_step_loss,
                     'train/avg_loss': avg_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
                     'train/step': self.global_step,
                 }, step=self.global_step)
         
         return total_loss / self.steps_per_epoch
-        
-        return total_loss / num_batches
     
     @torch.no_grad()
     def validate(self):
@@ -496,7 +497,7 @@ class LSTMOnlyTrainer:
             num_batches += 1
             
             avg_loss = total_loss / num_batches
-            pbar.set_postfix({'val_loss': f"{avg_loss:.4f}"})
+            pbar.set_postfix({'loss': f"{step_loss:.4f}", 'avg_loss': f"{avg_loss:.4f}"})
         
         if num_batches == 0:
             return 0.0
