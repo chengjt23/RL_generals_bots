@@ -451,16 +451,17 @@ class LSTMOnlyTrainer:
             self.hidden_states = step_hidden_states
 
             # Optimizer Step (once per 'step')
+            grad_norm = 0.0
             if self.scaler is not None:
                 self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config['training']['gradient_clip']
                 )
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config['training']['gradient_clip']
                 )
@@ -479,7 +480,8 @@ class LSTMOnlyTrainer:
             pbar.set_postfix({
                 'loss': f"{mean_step_loss:.4f}",
                 'avg_loss': f"{avg_loss:.4f}",
-                'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
+                'lr': f"{self.scheduler.get_last_lr()[0]:.2e}",
+                'gnorm': f"{grad_norm:.2f}"
             })
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
@@ -487,6 +489,7 @@ class LSTMOnlyTrainer:
                     'train/loss': mean_step_loss,
                     'train/avg_loss': avg_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
+                    'train/grad_norm': grad_norm,
                     'train/step': self.global_step,
                 }, step=self.global_step)
         

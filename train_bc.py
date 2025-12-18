@@ -119,23 +119,16 @@ class BehaviorCloningTrainer:
         # Create persistent iterator for resuming
         self.train_iterator = iter(self.train_loader)
         
-        # Use IterableDataset for validation as well to support stateful replay
-        # But we want to iterate over full replays sequentially
-        # So we use a batch size of 1 (one replay at a time) or manage streams
-        # For simplicity, let's use the same iterable dataloader but with batch_size=1
-        # This way we can validate on full sequences (chunks of 32, but from same game)
-        # Actually, to validate on FULL replays, we should just iterate through replays one by one
-        # and feed chunks.
-        
+        # Use same batch size and workers for validation to ensure speed
         self.val_loader = create_iterable_dataloader(
             data_dir=data_config['data_dir'],
-            batch_size=1, # Validate one game at a time (or one stream)
+            batch_size=train_config['batch_size'], 
             grid_size=data_config['grid_size'],
-            num_workers=1, # Single worker for validation
+            num_workers=train_config['num_workers'],
             max_replays=val_replays,
             min_stars=data_config['min_stars'],
             max_turns=data_config['max_turns'],
-            sequence_len=32, # Still chunk for memory, but we maintain state
+            sequence_len=32,
         )
         
         print(f"Train replays (streaming): {train_replays}")
@@ -146,8 +139,8 @@ class BehaviorCloningTrainer:
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config['training']['learning_rate'],
-            betas=opt_config['betas'],
-            eps=opt_config['eps'],
+            betas=[0.9, 0.999], # Standard betas for stability
+            eps=1e-5, # Higher epsilon for stability
             weight_decay=self.config['training']['weight_decay'],
         )
         
@@ -179,6 +172,10 @@ class BehaviorCloningTrainer:
             'val_loss': [],
             'learning_rate': [],
         }
+        
+        # Dictionary to store hidden states for each worker
+        # Key: worker_id (int), Value: (h, c) tuple
+        self.hidden_states = {}
         
         early_stop_config = self.config['training'].get('early_stopping', {})
         self.early_stopping_enabled = early_stop_config.get('enabled', True)
@@ -249,171 +246,272 @@ class BehaviorCloningTrainer:
         total_loss = 0.0
         num_batches = 0
         
-        # Reset hidden state at the beginning of each epoch
-        # Or keep it if we assume continuity across epochs (unlikely for infinite iterator)
-        self.hidden_state = None
+        # Dictionary to store hidden states for each worker
+        # Key: worker_id (int), Value: (h, c) tuple
+        if not hasattr(self, 'hidden_states'):
+            self.hidden_states = {}
+            
+        # Gradient Accumulation Setup
+        accumulation_steps = self.config['training']['num_workers']
+        effective_batch_size = self.config['training']['batch_size']
+        print(f"Gradient Accumulation: {accumulation_steps} steps (Effective Batch Size: {effective_batch_size})")
         
         pbar = tqdm(
             range(self.steps_per_epoch),
             desc=f"Epoch {epoch}/{self.config['training']['num_epochs']} [Train]",
-            unit="batch",
+            unit="step",
             leave=False,
         )
         
-        # Hidden state management for TBPTT
-        # We don't have explicit episode boundaries in the current dataloader batching
-        # The dataloader yields random chunks from different games.
-        # Ideally, we should maintain hidden states if we were iterating through specific episodes.
-        # However, since our dataloader yields independent chunks (shuffled), 
-        # we must initialize hidden state to zero for each batch.
-        # This is "Truncated BPTT" where we only backprop within the chunk.
-        # To do true stateful TBPTT across chunks, the dataloader needs to be stateful per worker/batch index.
-        # Given the current dataloader design (random chunks), we reset hidden state every batch.
-        
-        for _ in pbar:
-            try:
-                obs, memory, actions, reset_mask = next(self.train_iterator)
-            except StopIteration:
-                # Should not happen with infinite iterator, but just in case
-                self.train_iterator = iter(self.train_loader)
-                obs, memory, actions, reset_mask = next(self.train_iterator)
-                
-            obs = obs.to(self.device)
-            memory = memory.to(self.device)
-            actions = actions.to(self.device)
-            reset_mask = reset_mask.to(self.device)
-            
+        for step in pbar:
             self.optimizer.zero_grad()
             
-            # Initialize hidden state if needed
-            if self.hidden_state is None:
-                # We need to know the hidden dim from the model
-                # Assuming model.backbone.conv_lstm.hidden_dim is accessible or we infer from batch
-                # But simpler: let the model init it if None, then we maintain it.
-                # However, we need to reset specific batch elements based on reset_mask
-                pass
+            # Collect batches and organize them into "rounds" to handle dependencies
+            # Round 0: All first batches from workers
+            # Round 1: All second batches from workers (dependent on Round 0), etc.
+            rounds = [] # List of lists of (obs, memory, actions, reset_mask, worker_id)
+            worker_round_tracker = {} # worker_id -> current_round_index
+            total_samples = 0
             
-            # If we have a hidden state, we must reset the parts where new games started
-            if self.hidden_state is not None:
-                h, c = self.hidden_state
-                # reset_mask is (B,), we need to expand to (B, C, H, W)
-                # h shape: (B, C, H, W)
-                mask_expanded = reset_mask.view(-1, 1, 1, 1).expand_as(h)
-                h = h * (~mask_expanded)
-                c = c * (~mask_expanded)
-                self.hidden_state = (h, c)
-            
-            if self.scaler is not None:
-                with autocast():
-                    # Forward pass with time dimension
-                    policy_logits, _, new_hidden_state = self.model(obs, memory, self.hidden_state)
-                    loss = self.compute_loss(obs, actions, policy_logits)
+            for _ in range(accumulation_steps):
+                try:
+                    obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
+                except StopIteration:
+                    self.train_iterator = iter(self.train_loader)
+                    obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
                 
-                self.scaler.scale(loss).backward()
+                curr_w_id = worker_id.item()
+                total_samples += obs.shape[0]
+                
+                # Determine which round this batch belongs to
+                round_idx = worker_round_tracker.get(curr_w_id, -1) + 1
+                worker_round_tracker[curr_w_id] = round_idx
+                
+                # Extend rounds list if needed
+                while len(rounds) <= round_idx:
+                    rounds.append([])
+                
+                rounds[round_idx].append((obs, memory, actions, reset_mask, curr_w_id))
+            
+            # Process each round sequentially, but parallelize within the round
+            total_step_loss = 0.0
+            
+            # Temporary hidden states for this step (to pass state between rounds)
+            # We copy self.hidden_states initially, then update it as we process rounds
+            step_hidden_states = self.hidden_states.copy()
+            
+            for round_batches in rounds:
+                if not round_batches:
+                    continue
+                    
+                # Unpack batch data
+                obs_list, mem_list, act_list, mask_list, wid_list = zip(*round_batches)
+                
+                # Stack for GPU
+                obs_stacked = torch.cat([x.to(self.device) for x in obs_list], dim=0)
+                memory_stacked = torch.cat([x.to(self.device) for x in mem_list], dim=0)
+                actions_stacked = torch.cat([x.to(self.device) for x in act_list], dim=0)
+                
+                current_stacked_batch_size = obs_stacked.shape[0]
+                
+                # Prepare hidden states
+                h_list = []
+                c_list = []
+                
+                # Compute dimensions once
+                grid_size = self.config['model']['grid_size']
+                hidden_dim = self.config['model']['base_channels'] * 8
+                bottleneck_size = grid_size // 8
+                
+                batch_sizes = []
+                
+                for i, w_id in enumerate(wid_list):
+                    b_size = obs_list[i].shape[0]
+                    batch_sizes.append(b_size)
+                    
+                    # Get state from our local tracker (which might have updates from previous rounds)
+                    if w_id not in step_hidden_states:
+                        step_hidden_states[w_id] = None
+                    
+                    state = step_hidden_states[w_id]
+                    mask = mask_list[i].to(self.device)
+                    
+                    if state is None:
+                        h = torch.zeros(b_size, hidden_dim, bottleneck_size, bottleneck_size, device=self.device)
+                        c = torch.zeros(b_size, hidden_dim, bottleneck_size, bottleneck_size, device=self.device)
+                    else:
+                        h, c = state
+                        h = h.to(self.device)
+                        c = c.to(self.device)
+                        
+                        mask_expanded = mask.view(-1, 1, 1, 1).expand_as(h)
+                        h = h * (~mask_expanded)
+                        c = c * (~mask_expanded)
+                    
+                    h_list.append(h)
+                    c_list.append(c)
+                
+                h_stacked = torch.cat(h_list, dim=0)
+                c_stacked = torch.cat(c_list, dim=0)
+                hidden_state_stacked = (h_stacked, c_stacked)
+                
+                # Forward & Backward
+                if self.scaler is not None:
+                    with autocast():
+                        policy_logits, _, new_hidden_state = self.model(obs_stacked, memory_stacked, hidden_state_stacked)
+                        loss = self.compute_loss(obs_stacked, actions_stacked, policy_logits)
+                        
+                        # Correct Loss Scaling:
+                        # We want the gradient of the mean loss over ALL 'total_samples'.
+                        # 'loss' is mean over 'current_stacked_batch_size'.
+                        # Contribution to total mean = loss * (current_stacked_batch_size / total_samples)
+                        scaled_loss = loss * (current_stacked_batch_size / total_samples)
+                    
+                    self.scaler.scale(scaled_loss).backward()
+                else:
+                    policy_logits, _, new_hidden_state = self.model(obs_stacked, memory_stacked, hidden_state_stacked)
+                    loss = self.compute_loss(obs_stacked, actions_stacked, policy_logits)
+                    
+                    # Correct Loss Scaling
+                    scaled_loss = loss * (current_stacked_batch_size / total_samples)
+                    scaled_loss.backward()
+                
+                # For logging, we want to track the weighted sum of losses
+                # loss.item() is mean over current stack.
+                # We want to sum up (mean_stack * size_stack) to get total error sum
+                total_step_loss += loss.item() * current_stacked_batch_size
+                
+                # Update hidden states for next round / next step
+                h_new, c_new = new_hidden_state
+                idx = 0
+                for w_id, b_size in zip(wid_list, batch_sizes):
+                    h_w = h_new[idx:idx+b_size]
+                    c_w = c_new[idx:idx+b_size]
+                    step_hidden_states[w_id] = (h_w.detach(), c_w.detach())
+                    idx += b_size
+            
+            # Update global hidden states with the final states from this step
+            self.hidden_states = step_hidden_states
+
+            # Optimizer Step (once per 'step')
+            grad_norm = 0.0
+            if self.scaler is not None:
                 self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config['training']['gradient_clip']
                 )
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                policy_logits, _, new_hidden_state = self.model(obs, memory, self.hidden_state)
-                loss = self.compute_loss(obs, actions, policy_logits)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config['training']['gradient_clip']
                 )
                 self.optimizer.step()
             
-            # Detach hidden state for TBPTT
-            h, c = new_hidden_state
-            self.hidden_state = (h.detach(), c.detach())
-            
             self.scheduler.step()
+            self.global_step += 1
             
-            total_loss += loss.item()
-            num_batches += 1
+            # Logging
+            # Mean loss over the entire effective batch
+            mean_step_loss = total_step_loss / total_samples if total_samples > 0 else 0.0
             
-            avg_loss = total_loss / num_batches
+            total_loss += mean_step_loss
+            avg_loss = total_loss / (step + 1)
+            
             pbar.set_postfix({
-                'loss': f"{loss.item():.4f}",
+                'loss': f"{mean_step_loss:.4f}",
                 'avg_loss': f"{avg_loss:.4f}",
-                'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
+                'lr': f"{self.scheduler.get_last_lr()[0]:.2e}",
+                'gnorm': f"{grad_norm:.2f}"
             })
             
             if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
                 wandb.log({
-                    'train/loss': loss.item(),
+                    'train/loss': mean_step_loss,
                     'train/avg_loss': avg_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
+                    'train/grad_norm': grad_norm,
                     'train/step': self.global_step,
                 }, step=self.global_step)
-            
-            self.global_step += 1
         
-        return total_loss / num_batches
+        return total_loss / self.steps_per_epoch
     
     @torch.no_grad()
     def validate(self):
         self.model.eval()
-        # Validation iterator
+        total_loss = 0.0
+        num_batches = 0
+        
         val_iterator = iter(self.val_loader)
+        val_hidden_states = {} # Key: worker_id, Value: (h, c)
         
-        # We need to maintain hidden state for validation stream
-        # Since batch_size=1, hidden_state is (1, C, H, W)
-        val_hidden_state = None
-        
-        # We'll validate for a fixed number of steps or until dataset exhaustion
-        # Since it's an iterable dataset, we can just run for some steps
-        # Or better, since we know val_replays, we can estimate steps
-        # But for now let's just run for a fixed number of batches (chunks)
-        # to get a representative loss.
-        # Assuming avg game length 300, seq_len 32 -> ~10 chunks per game
-        # If we have 100 val replays -> 1000 chunks
-        
-        val_steps = 1000 # Adjust based on dataset size
+        # Validate on 50 effective batches (approx 100k samples)
+        # This is much faster than 1000 single samples and provides better estimate
+        val_steps = 50 
+        accumulation_steps = self.config['training']['num_workers']
         
         pbar = tqdm(
             range(val_steps),
             desc="Validation",
-            unit="chunk",
+            unit="step",
             ncols=120,
             leave=False
         )
         
         for _ in pbar:
-            try:
-                obs, memory, actions, reset_mask = next(val_iterator)
-            except StopIteration:
+            step_loss_accum = 0.0
+            batches_processed = 0
+            
+            # Accumulate over workers to match training distribution
+            for _ in range(accumulation_steps):
+                try:
+                    obs, memory, actions, reset_mask, worker_id = next(val_iterator)
+                except StopIteration:
+                    # If validation set exhausted, just break inner loop
+                    break
+                
+                curr_w_id = worker_id.item()
+                
+                obs = obs.to(self.device)
+                memory = memory.to(self.device)
+                actions = actions.to(self.device)
+                reset_mask = reset_mask.to(self.device)
+                
+                if curr_w_id not in val_hidden_states:
+                    val_hidden_states[curr_w_id] = None
+                
+                val_hidden_state = val_hidden_states[curr_w_id]
+                
+                if val_hidden_state is not None:
+                    h, c = val_hidden_state
+                    mask_expanded = reset_mask.view(-1, 1, 1, 1).expand_as(h)
+                    h = h * (~mask_expanded)
+                    c = c * (~mask_expanded)
+                    val_hidden_state = (h, c)
+                
+                policy_logits, _, new_hidden_state = self.model(obs, memory, val_hidden_state)
+                loss = self.compute_loss(obs, actions, policy_logits)
+                
+                # We don't need to scale loss for gradients, but we want the mean over the effective batch
+                # compute_loss returns mean over micro-batch.
+                step_loss_accum += loss.item()
+                batches_processed += 1
+                
+                h, c = new_hidden_state
+                val_hidden_states[curr_w_id] = (h, c)
+            
+            if batches_processed == 0:
                 break
                 
-            obs = obs.to(self.device)
-            memory = memory.to(self.device)
-            actions = actions.to(self.device)
-            reset_mask = reset_mask.to(self.device)
-            
-            # Reset hidden state if new game
-            if val_hidden_state is not None:
-                h, c = val_hidden_state
-                mask_expanded = reset_mask.view(-1, 1, 1, 1).expand_as(h)
-                h = h * (~mask_expanded)
-                c = c * (~mask_expanded)
-                val_hidden_state = (h, c)
-            
-            # Forward pass with state
-            policy_logits, _, new_hidden_state = self.model(obs, memory, val_hidden_state)
-            loss = self.compute_loss(obs, actions, policy_logits)
-            
-            # Update state
-            val_hidden_state = new_hidden_state
-            
-            total_loss += loss.item()
+            # Average loss over the accumulation steps
+            step_loss = step_loss_accum / batches_processed
+            total_loss += step_loss
             num_batches += 1
             
             avg_loss = total_loss / num_batches
-            pbar.set_postfix({'val_loss': f"{avg_loss:.4f}"})
+            pbar.set_postfix({'loss': f"{step_loss:.4f}", 'avg_loss': f"{avg_loss:.4f}"})
         
         if num_batches == 0:
             return 0.0
