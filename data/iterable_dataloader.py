@@ -51,18 +51,25 @@ class GeneralsReplayIterableDataset(IterableDataset):
     def _get_replay_iterator(self, worker_id: int, num_workers: int) -> Iterator[Tuple[Dict, int]]:
         """Yields (replay, player_idx) tuples indefinitely for a specific worker."""
         if self.use_pyarrow:
-            groups_per_worker = (self.num_row_groups + num_workers - 1) // num_workers
-            start_group = worker_id * groups_per_worker
-            end_group = min(self.num_row_groups, (worker_id + 1) * groups_per_worker)
+            # Use strided assignment to ensure better distribution and avoid empty ranges
+            # if num_row_groups is not divisible by num_workers.
+            # e.g. 100 groups, 64 workers.
+            # Old way: workers 50-63 got nothing.
+            # New way: workers 0-35 get 2 groups, workers 36-63 get 1 group.
+            my_groups = [i for i in range(self.num_row_groups) if i % num_workers == worker_id]
             
+            if not my_groups:
+                # This worker has no groups assigned (num_workers > num_row_groups)
+                return
+
             max_replays_per_worker = None
             if self.max_replays is not None:
                 max_replays_per_worker = (self.max_replays + num_workers - 1) // num_workers
             
             while True:
-                group_indices = torch.arange(start_group, end_group)
-                perm = torch.randperm(len(group_indices))
-                shuffled_groups = group_indices[perm].tolist()
+                # Shuffle assigned groups
+                perm = torch.randperm(len(my_groups))
+                shuffled_groups = [my_groups[i] for i in perm.tolist()]
                 
                 valid_replay_count = 0
                 for g in shuffled_groups:
@@ -155,7 +162,7 @@ class GeneralsReplayIterableDataset(IterableDataset):
             
             iterator = range(worker_batch_size)
             if first_batch:
-                iterator = tqdm(iterator, desc=f"Worker {w_id} Init", position=w_id, leave=False)
+                iterator = tqdm(iterator, desc=f"Worker {w_id} Init", leave=False)
             
             for i in iterator:
                 # Ensure we get a sample for this slot
@@ -168,7 +175,10 @@ class GeneralsReplayIterableDataset(IterableDataset):
                             streams[i] = self._extract_samples_from_replay(replay, target_player)
                             is_new_game = True
                         except StopIteration:
-                            continue
+                            # Replay source exhausted (e.g. no groups assigned to this worker)
+                            # We cannot fill this slot.
+                            # If we can't fill the batch, we must stop.
+                            return
                     
                     try:
                         sample = next(streams[i])
