@@ -3,6 +3,7 @@ import torch
 from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Iterator
+from tqdm import tqdm
 from generals.core.grid import Grid
 from generals.core.game import Game
 from generals.core.observation import Observation
@@ -142,17 +143,26 @@ class GeneralsReplayIterableDataset(IterableDataset):
         # streams[i] is a generator yielding chunks from a single (replay, player) tuple
         streams = [None] * worker_batch_size
         
+        print(f"Worker {w_id}: Initialized. Waiting for data...")
+        
+        first_batch = True
+        
         while True:
             batch_obs = []
             batch_memory = []
             batch_actions = []
             reset_mask = [] 
             
-            for i in range(worker_batch_size):
+            iterator = range(worker_batch_size)
+            if first_batch:
+                iterator = tqdm(iterator, desc=f"Worker {w_id} Init", position=w_id, leave=False)
+            
+            for i in iterator:
                 is_new_game = False
                 
                 if streams[i] is None:
                     try:
+                        # print(f"Worker {w_id}: Fetching new replay for stream {i}")
                         replay, target_player = next(replay_source)
                         streams[i] = self._extract_samples_from_replay(replay, target_player)
                         is_new_game = True
@@ -170,6 +180,7 @@ class GeneralsReplayIterableDataset(IterableDataset):
                     
                 except StopIteration:
                     try:
+                        # print(f"Worker {w_id}: Stream {i} finished. Fetching next replay.")
                         replay, target_player = next(replay_source)
                         streams[i] = self._extract_samples_from_replay(replay, target_player)
                         is_new_game = True
@@ -185,6 +196,8 @@ class GeneralsReplayIterableDataset(IterableDataset):
                         continue
             
             if len(batch_obs) == worker_batch_size:
+                first_batch = False
+                # print(f"Worker {w_id}: Yielding batch")
                 yield (
                     torch.from_numpy(np.stack(batch_obs)).float(),
                     torch.from_numpy(np.stack(batch_memory)).float(),
@@ -267,6 +280,7 @@ class GeneralsReplayIterableDataset(IterableDataset):
                 
                 # If buffer is full, yield the sequence and clear it
                 if len(buffer['obs']) >= self.sequence_len:
+                    # print(f"DEBUG: Yielding sequence for player {player_idx}")
                     yield (
                         np.stack(buffer['obs']),    # (Seq, C, H, W)
                         np.stack(buffer['memory']), # (Seq, C, H, W)

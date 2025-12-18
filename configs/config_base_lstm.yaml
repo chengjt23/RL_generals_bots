@@ -1,5 +1,5 @@
 training:
-  batch_size: 256
+  batch_size: 1536
   learning_rate: 0.0003
   num_epochs: 30
   steps_per_epoch: 1000
@@ -12,7 +12,7 @@ training:
   log_every: 100
   
   device: cuda
-  num_workers: 4
+  num_workers: 24
   mixed_precision: true
 
   early_stopping:

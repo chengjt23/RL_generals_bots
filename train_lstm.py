@@ -299,9 +299,11 @@ class LSTMOnlyTrainer:
             leave=False,
         )
         
-        for _ in pbar:
+        for i, _ in enumerate(pbar):
             try:
+                # print(f"DEBUG: Waiting for batch {i}")
                 obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
+                # print(f"DEBUG: Got batch {i} from worker {worker_id.item()}")
             except StopIteration:
                 self.train_iterator = iter(self.train_loader)
                 obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
