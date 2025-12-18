@@ -119,7 +119,7 @@ class GeneralsReplayIterableDataset(IterableDataset):
                         yield replay, 1
                         yield replay, 0
 
-    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
         worker_info = get_worker_info()
         
         if worker_info is None:
@@ -132,6 +132,8 @@ class GeneralsReplayIterableDataset(IterableDataset):
         # Each worker produces a sub-batch
         assert self.batch_size % w_num == 0, "Batch size must be divisible by num_workers"
         worker_batch_size = self.batch_size // w_num
+        
+        print(f"Worker {w_id} starting. Batch size: {self.batch_size}, Worker batch size: {worker_batch_size}")
         
         # Create replay source
         replay_source = self._get_replay_iterator(w_id, w_num)
@@ -187,7 +189,8 @@ class GeneralsReplayIterableDataset(IterableDataset):
                     torch.from_numpy(np.stack(batch_obs)).float(),
                     torch.from_numpy(np.stack(batch_memory)).float(),
                     torch.from_numpy(np.stack(batch_actions)).long(),
-                    torch.tensor(reset_mask, dtype=torch.bool)
+                    torch.tensor(reset_mask, dtype=torch.bool),
+                    torch.tensor(w_id, dtype=torch.long)
                 )
     
     def _is_valid_replay(self, replay: Dict) -> bool:

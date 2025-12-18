@@ -287,7 +287,10 @@ class LSTMOnlyTrainer:
         total_loss = 0.0
         num_batches = 0
         
-        self.hidden_state = None
+        # Dictionary to store hidden states for each worker
+        # Key: worker_id (int), Value: (h, c) tuple
+        if not hasattr(self, 'hidden_states'):
+            self.hidden_states = {}
         
         pbar = tqdm(
             range(self.steps_per_epoch),
@@ -298,10 +301,15 @@ class LSTMOnlyTrainer:
         
         for _ in pbar:
             try:
-                obs, memory, actions, reset_mask = next(self.train_iterator)
+                obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
             except StopIteration:
                 self.train_iterator = iter(self.train_loader)
-                obs, memory, actions, reset_mask = next(self.train_iterator)
+                obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
+            
+            # worker_id is a tensor of shape (1,) or scalar because DataLoader collates
+            # Since batch_size=None in DataLoader, it yields exactly what dataset yields.
+            # Dataset yields (..., worker_id_tensor) where worker_id_tensor is scalar tensor.
+            curr_w_id = worker_id.item()
                 
             obs = obs.to(self.device)
             memory = memory.to(self.device)
@@ -310,19 +318,26 @@ class LSTMOnlyTrainer:
             
             self.optimizer.zero_grad()
             
-            if self.hidden_state is None:
-                pass
+            # Retrieve hidden state for this worker
+            if curr_w_id not in self.hidden_states:
+                self.hidden_states[curr_w_id] = None
             
-            if self.hidden_state is not None:
-                h, c = self.hidden_state
+            current_hidden_state = self.hidden_states[curr_w_id]
+            
+            if current_hidden_state is not None:
+                h, c = current_hidden_state
+                # Ensure hidden state is on correct device (in case it was initialized on CPU or moved)
+                h = h.to(self.device)
+                c = c.to(self.device)
+                
                 mask_expanded = reset_mask.view(-1, 1, 1, 1).expand_as(h)
                 h = h * (~mask_expanded)
                 c = c * (~mask_expanded)
-                self.hidden_state = (h, c)
+                current_hidden_state = (h, c)
             
             if self.scaler is not None:
                 with autocast():
-                    policy_logits, _, new_hidden_state = self.model(obs, memory, self.hidden_state)
+                    policy_logits, _, new_hidden_state = self.model(obs, memory, current_hidden_state)
                     loss = self.compute_loss(obs, actions, policy_logits)
                 
                 self.scaler.scale(loss).backward()
@@ -334,7 +349,7 @@ class LSTMOnlyTrainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                policy_logits, _, new_hidden_state = self.model(obs, memory, self.hidden_state)
+                policy_logits, _, new_hidden_state = self.model(obs, memory, current_hidden_state)
                 loss = self.compute_loss(obs, actions, policy_logits)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
@@ -344,7 +359,8 @@ class LSTMOnlyTrainer:
                 self.optimizer.step()
             
             h, c = new_hidden_state
-            self.hidden_state = (h.detach(), c.detach())
+            # Detach and store for next iteration of THIS worker
+            self.hidden_states[curr_w_id] = (h.detach(), c.detach())
             
             self.scheduler.step()
             
@@ -390,7 +406,13 @@ class LSTMOnlyTrainer:
         
         for _ in pbar:
             try:
-                obs, memory, actions, reset_mask = next(val_iterator)
+                # Validation loader also yields worker_id now, but we ignore it for single-stream validation
+                # Or we can use it if we want multi-stream validation
+                batch_data = next(val_iterator)
+                if len(batch_data) == 5:
+                    obs, memory, actions, reset_mask, _ = batch_data
+                else:
+                    obs, memory, actions, reset_mask = batch_data
             except StopIteration:
                 break
                 
