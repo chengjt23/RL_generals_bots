@@ -322,9 +322,14 @@ class LSTMOnlyTrainer:
         
         for step in pbar:
             self.optimizer.zero_grad()
-            step_loss_accum = 0.0
             
-            # Accumulate gradients from multiple micro-batches
+            # Collect batches and organize them into "rounds" to handle dependencies
+            # Round 0: All first batches from workers
+            # Round 1: All second batches from workers (dependent on Round 0), etc.
+            rounds = [] # List of lists of (obs, memory, actions, reset_mask, worker_id)
+            worker_round_tracker = {} # worker_id -> current_round_index
+            total_samples = 0
+            
             for _ in range(accumulation_steps):
                 try:
                     obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
@@ -333,58 +338,117 @@ class LSTMOnlyTrainer:
                     obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
                 
                 curr_w_id = worker_id.item()
+                total_samples += obs.shape[0]
+                
+                # Determine which round this batch belongs to
+                round_idx = worker_round_tracker.get(curr_w_id, -1) + 1
+                worker_round_tracker[curr_w_id] = round_idx
+                
+                # Extend rounds list if needed
+                while len(rounds) <= round_idx:
+                    rounds.append([])
+                
+                rounds[round_idx].append((obs, memory, actions, reset_mask, curr_w_id))
+            
+            # Process each round sequentially, but parallelize within the round
+            total_step_loss = 0.0
+            
+            # Temporary hidden states for this step (to pass state between rounds)
+            # We copy self.hidden_states initially, then update it as we process rounds
+            step_hidden_states = self.hidden_states.copy()
+            
+            for round_batches in rounds:
+                if not round_batches:
+                    continue
                     
-                obs = obs.to(self.device)
-                memory = memory.to(self.device)
-                actions = actions.to(self.device)
-                reset_mask = reset_mask.to(self.device)
+                # Unpack batch data
+                obs_list, mem_list, act_list, mask_list, wid_list = zip(*round_batches)
                 
-                # Retrieve hidden state for this worker
-                if curr_w_id not in self.hidden_states:
-                    self.hidden_states[curr_w_id] = None
+                # Stack for GPU
+                obs_stacked = torch.cat([x.to(self.device) for x in obs_list], dim=0)
+                memory_stacked = torch.cat([x.to(self.device) for x in mem_list], dim=0)
+                actions_stacked = torch.cat([x.to(self.device) for x in act_list], dim=0)
                 
-                current_hidden_state = self.hidden_states[curr_w_id]
+                current_stacked_batch_size = obs_stacked.shape[0]
                 
-                if current_hidden_state is not None:
-                    h, c = current_hidden_state
-                    # Ensure hidden state is on correct device
-                    h = h.to(self.device)
-                    c = c.to(self.device)
+                # Prepare hidden states
+                h_list = []
+                c_list = []
+                
+                # Compute dimensions once
+                grid_size = self.config['model']['grid_size']
+                hidden_dim = self.config['model']['base_channels'] * 8
+                bottleneck_size = grid_size // 8
+                
+                batch_sizes = []
+                
+                for i, w_id in enumerate(wid_list):
+                    b_size = obs_list[i].shape[0]
+                    batch_sizes.append(b_size)
                     
-                    mask_expanded = reset_mask.view(-1, 1, 1, 1).expand_as(h)
-                    h = h * (~mask_expanded)
-                    c = c * (~mask_expanded)
-                    current_hidden_state = (h, c)
+                    # Get state from our local tracker (which might have updates from previous rounds)
+                    if w_id not in step_hidden_states:
+                        step_hidden_states[w_id] = None
+                    
+                    state = step_hidden_states[w_id]
+                    mask = mask_list[i].to(self.device)
+                    
+                    if state is None:
+                        h = torch.zeros(b_size, hidden_dim, bottleneck_size, bottleneck_size, device=self.device)
+                        c = torch.zeros(b_size, hidden_dim, bottleneck_size, bottleneck_size, device=self.device)
+                    else:
+                        h, c = state
+                        h = h.to(self.device)
+                        c = c.to(self.device)
+                        
+                        mask_expanded = mask.view(-1, 1, 1, 1).expand_as(h)
+                        h = h * (~mask_expanded)
+                        c = c * (~mask_expanded)
+                    
+                    h_list.append(h)
+                    c_list.append(c)
                 
-                # Forward pass
+                h_stacked = torch.cat(h_list, dim=0)
+                c_stacked = torch.cat(c_list, dim=0)
+                hidden_state_stacked = (h_stacked, c_stacked)
+                
+                # Forward & Backward
                 if self.scaler is not None:
                     with autocast():
-                        policy_logits, _, new_hidden_state = self.model(obs, memory, current_hidden_state)
-                        loss = self.compute_loss(obs, actions, policy_logits)
-                        loss = loss / accumulation_steps
+                        policy_logits, _, new_hidden_state = self.model(obs_stacked, memory_stacked, hidden_state_stacked)
+                        loss = self.compute_loss(obs_stacked, actions_stacked, policy_logits)
+                        
+                        # Correct Loss Scaling:
+                        # We want the gradient of the mean loss over ALL 'total_samples'.
+                        # 'loss' is mean over 'current_stacked_batch_size'.
+                        # Contribution to total mean = loss * (current_stacked_batch_size / total_samples)
+                        scaled_loss = loss * (current_stacked_batch_size / total_samples)
                     
-                    self.scaler.scale(loss).backward()
+                    self.scaler.scale(scaled_loss).backward()
                 else:
-                    policy_logits, _, new_hidden_state = self.model(obs, memory, current_hidden_state)
-                    loss = self.compute_loss(obs, actions, policy_logits)
-                    loss = loss / accumulation_steps
-                    loss.backward()
+                    policy_logits, _, new_hidden_state = self.model(obs_stacked, memory_stacked, hidden_state_stacked)
+                    loss = self.compute_loss(obs_stacked, actions_stacked, policy_logits)
+                    
+                    # Correct Loss Scaling
+                    scaled_loss = loss * (current_stacked_batch_size / total_samples)
+                    scaled_loss.backward()
                 
-                # Accumulate loss for logging (this sums up to the mean loss of the effective batch)
-                step_loss_accum += loss.item() * accumulation_steps # Scale back up to get micro-batch mean, then we'll average later? 
-                # Wait, simpler: loss.item() is (mean / N). 
-                # We want sum(mean_i) / N? No.
-                # We want mean(all samples).
-                # mean(all) = sum(all samples) / (N * B_micro)
-                #           = sum(sum(micro_i)) / (N * B_micro)
-                #           = sum(mean(micro_i) * B_micro) / (N * B_micro)
-                #           = sum(mean(micro_i)) / N
-                # loss.item() is mean(micro_i) / N.
-                # So sum(loss.item()) is sum(mean(micro_i) / N) = sum(mean(micro_i)) / N = mean(all).
-                # So step_loss_accum += loss.item() is correct.
+                # For logging, we want to track the weighted sum of losses
+                # loss.item() is mean over current stack.
+                # We want to sum up (mean_stack * size_stack) to get total error sum
+                total_step_loss += loss.item() * current_stacked_batch_size
                 
-                h, c = new_hidden_state
-                self.hidden_states[curr_w_id] = (h.detach(), c.detach())
+                # Update hidden states for next round / next step
+                h_new, c_new = new_hidden_state
+                idx = 0
+                for w_id, b_size in zip(wid_list, batch_sizes):
+                    h_w = h_new[idx:idx+b_size]
+                    c_w = c_new[idx:idx+b_size]
+                    step_hidden_states[w_id] = (h_w.detach(), c_w.detach())
+                    idx += b_size
+            
+            # Update global hidden states with the final states from this step
+            self.hidden_states = step_hidden_states
 
             # Optimizer Step (once per 'step')
             if self.scaler is not None:
@@ -406,8 +470,8 @@ class LSTMOnlyTrainer:
             self.global_step += 1
             
             # Logging
-            # Normalize loss to be per-sample (average over the effective batch)
-            mean_step_loss = step_loss_accum / accumulation_steps
+            # Mean loss over the entire effective batch
+            mean_step_loss = total_step_loss / total_samples if total_samples > 0 else 0.0
             
             total_loss += mean_step_loss
             avg_loss = total_loss / (step + 1)

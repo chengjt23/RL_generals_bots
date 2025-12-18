@@ -1,8 +1,8 @@
 training:
   batch_size: 1024
   learning_rate: 0.0003
-  num_epochs: 50
-  steps_per_epoch: 300
+  num_epochs: 100
+  steps_per_epoch: 50
   gradient_clip: 1.0
   warmup_steps: 1000
   weight_decay: 0.0001
