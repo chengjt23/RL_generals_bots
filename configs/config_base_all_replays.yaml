@@ -3,7 +3,7 @@ training:
   learning_rate: 0.0003
   num_epochs: 50
   steps_per_epoch: 1000
-  gradient_clip: 5.0
+  gradient_clip: 10.0
   warmup_steps: 1000
   weight_decay: 0.0001
   
