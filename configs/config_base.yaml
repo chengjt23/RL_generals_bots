@@ -49,7 +49,8 @@ logging:
   save_dir: experiments
   tensorboard: true
   use_wandb: true
-  wandb_project: generals-rl
+  wandb_project: generals-bc
+  wandb_entity: coc  # <--- Add this line
   wandb_tags: [behavior_cloning, base]
 
 seed: 42

@@ -77,6 +77,7 @@ class BehaviorCloningTrainer:
             
             wandb.init(
                 project=self.config['logging'].get('wandb_project', 'generals-rl'),
+                workspace=self.config['logging'].get('wandb_entity', None),
                 name=f"{exp_name}_{timestamp}",
                 config=self.config,
                 dir=str(self.exp_dir),
