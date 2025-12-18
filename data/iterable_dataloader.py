@@ -18,12 +18,16 @@ class GeneralsReplayIterableDataset(IterableDataset):
         max_replays: int | None = None,
         min_stars: int = 70,
         max_turns: int = 500,
+        sequence_len: int = 32,
+        batch_size: int = 32,
     ):
         self.data_dir = Path(data_dir)
         self.grid_size = grid_size
         self.min_stars = min_stars
         self.max_turns = max_turns
         self.max_replays = max_replays
+        self.sequence_len = sequence_len
+        self.batch_size = batch_size
         
         try:
             import pyarrow.parquet as pq
@@ -43,27 +47,18 @@ class GeneralsReplayIterableDataset(IterableDataset):
             if max_replays is not None:
                 self.num_replays = min(self.num_replays, max_replays)
     
-    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor, int]]:
-        worker_info = get_worker_info()
-        
-        if worker_info is None:
-            w_id = 0
-            w_num = 1
-        else:
-            w_id = worker_info.id
-            w_num = worker_info.num_workers
-        
+    def _get_replay_iterator(self, worker_id: int, num_workers: int) -> Iterator[Tuple[Dict, int]]:
+        """Yields (replay, player_idx) tuples indefinitely for a specific worker."""
         if self.use_pyarrow:
-            groups_per_worker = (self.num_row_groups + w_num - 1) // w_num
-            start_group = w_id * groups_per_worker
-            end_group = min(self.num_row_groups, (w_id + 1) * groups_per_worker)
+            groups_per_worker = (self.num_row_groups + num_workers - 1) // num_workers
+            start_group = worker_id * groups_per_worker
+            end_group = min(self.num_row_groups, (worker_id + 1) * groups_per_worker)
             
             max_replays_per_worker = None
             if self.max_replays is not None:
-                max_replays_per_worker = (self.max_replays + w_num - 1) // w_num
+                max_replays_per_worker = (self.max_replays + num_workers - 1) // num_workers
             
-            while True:  # Infinite loop to allow resuming
-                # Shuffle row groups to ensure different data each epoch
+            while True:
                 group_indices = torch.arange(start_group, end_group)
                 perm = torch.randperm(len(group_indices))
                 shuffled_groups = group_indices[perm].tolist()
@@ -77,7 +72,10 @@ class GeneralsReplayIterableDataset(IterableDataset):
                     batch = row_group.to_pydict()
                     
                     num_rows = len(batch['mapWidth'])
-                    for i in range(num_rows):
+                    # Shuffle within row group
+                    row_indices = torch.randperm(num_rows).tolist()
+                    
+                    for i in row_indices:
                         if max_replays_per_worker is not None and valid_replay_count >= max_replays_per_worker:
                             break
                         
@@ -88,37 +86,109 @@ class GeneralsReplayIterableDataset(IterableDataset):
                         
                         valid_replay_count += 1
                         
-                        for sample in self._extract_samples_from_replay(replay):
-                            obs, memory, action, player_idx = sample
-                            obs_tensor = torch.from_numpy(obs).to(torch.float32)
-                            memory_tensor = torch.from_numpy(memory).to(torch.float32)
-                            action_tensor = torch.from_numpy(action).long()
-                            yield obs_tensor, memory_tensor, action_tensor, player_idx
+                        # Yield both perspectives as separate tasks
+                        # Randomize order of players to avoid bias
+                        if torch.rand(1).item() < 0.5:
+                            yield replay, 0
+                            yield replay, 1
+                        else:
+                            yield replay, 1
+                            yield replay, 0
         else:
-            per_worker = self.num_replays // w_num
-            start_idx = w_id * per_worker
+            per_worker = self.num_replays // num_workers
+            start_idx = worker_id * per_worker
             end_idx = start_idx + per_worker
-            if w_id == w_num - 1:
+            if worker_id == num_workers - 1:
                 end_idx = self.num_replays
             
-            while True:  # Infinite loop to allow resuming
-                # Shuffle indices to ensure different data each epoch
+            while True:
                 indices = torch.arange(start_idx, end_idx)
                 perm = torch.randperm(len(indices))
                 shuffled_indices = indices[perm].tolist()
                 
                 for idx in shuffled_indices:
                     replay = self.df.iloc[idx].to_dict()
-                    
                     if not self._is_valid_replay(replay):
                         continue
                     
-                    for sample in self._extract_samples_from_replay(replay):
-                        obs, memory, action, player_idx = sample
-                        obs_tensor = torch.from_numpy(obs).to(torch.float32)
-                        memory_tensor = torch.from_numpy(memory).to(torch.float32)
-                        action_tensor = torch.from_numpy(action).long()
-                        yield obs_tensor, memory_tensor, action_tensor, player_idx
+                    # Yield both perspectives
+                    if torch.rand(1).item() < 0.5:
+                        yield replay, 0
+                        yield replay, 1
+                    else:
+                        yield replay, 1
+                        yield replay, 0
+
+    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        worker_info = get_worker_info()
+        
+        if worker_info is None:
+            w_id = 0
+            w_num = 1
+        else:
+            w_id = worker_info.id
+            w_num = worker_info.num_workers
+            
+        # Each worker produces a sub-batch
+        assert self.batch_size % w_num == 0, "Batch size must be divisible by num_workers"
+        worker_batch_size = self.batch_size // w_num
+        
+        # Create replay source
+        replay_source = self._get_replay_iterator(w_id, w_num)
+        
+        # Initialize streams
+        # streams[i] is a generator yielding chunks from a single (replay, player) tuple
+        streams = [None] * worker_batch_size
+        
+        while True:
+            batch_obs = []
+            batch_memory = []
+            batch_actions = []
+            reset_mask = [] 
+            
+            for i in range(worker_batch_size):
+                is_new_game = False
+                
+                if streams[i] is None:
+                    try:
+                        replay, target_player = next(replay_source)
+                        streams[i] = self._extract_samples_from_replay(replay, target_player)
+                        is_new_game = True
+                    except StopIteration:
+                        continue
+                
+                try:
+                    sample = next(streams[i])
+                    obs, memory, action, _ = sample
+                    
+                    batch_obs.append(obs)
+                    batch_memory.append(memory)
+                    batch_actions.append(action)
+                    reset_mask.append(is_new_game)
+                    
+                except StopIteration:
+                    try:
+                        replay, target_player = next(replay_source)
+                        streams[i] = self._extract_samples_from_replay(replay, target_player)
+                        is_new_game = True
+                        
+                        sample = next(streams[i])
+                        obs, memory, action, _ = sample
+                        
+                        batch_obs.append(obs)
+                        batch_memory.append(memory)
+                        batch_actions.append(action)
+                        reset_mask.append(is_new_game)
+                    except StopIteration:
+                        continue
+            
+            if len(batch_obs) == worker_batch_size:
+                yield (
+                    torch.from_numpy(np.stack(batch_obs)).float(),
+                    torch.from_numpy(np.stack(batch_memory)).float(),
+                    torch.from_numpy(np.stack(batch_actions)).long(),
+                    torch.tensor(reset_mask, dtype=torch.bool)
+                )
     
     def _is_valid_replay(self, replay: Dict) -> bool:
         if len(replay['moves']) > self.max_turns:
@@ -129,7 +199,7 @@ class GeneralsReplayIterableDataset(IterableDataset):
         
         return True
     
-    def _extract_samples_from_replay(self, replay: Dict) -> Iterator[Tuple]:
+    def _extract_samples_from_replay(self, replay: Dict, target_player_idx: int) -> Iterator[Tuple]:
         width = replay['mapWidth']
         height = replay['mapHeight']
         
@@ -143,6 +213,9 @@ class GeneralsReplayIterableDataset(IterableDataset):
         # Initialize memory augmentation for both players
         memory_0 = MemoryAugmentation((self.grid_size, self.grid_size))
         memory_1 = MemoryAugmentation((self.grid_size, self.grid_size))
+        
+        # Buffer for sequential yielding (only for target player)
+        buffer = {'obs': [], 'memory': [], 'action': []}
         
         for move in replay['moves']:
             if len(move) < 5:
@@ -171,20 +244,37 @@ class GeneralsReplayIterableDataset(IterableDataset):
                 continue
             
             action = np.array([0, start_row, start_col, direction, is_half], dtype=np.int8)
-            action_pass = np.array([1, 0, 0, 0, 0], dtype=np.int8)
             
-            # Get current memory features before taking action
-            # Only yield sample if the player meets the star requirement
-            if replay['stars'][player_idx] >= self.min_stars:
+            # Only process if the player meets the star requirement AND matches target
+            if replay['stars'][player_idx] >= self.min_stars and player_idx == target_player_idx:
                 if player_idx == 0:
                     obs_tensor = obs_0.as_tensor().astype(np.float32, copy=True)
                     memory_features = memory_0.get_memory_features().astype(np.float32, copy=True)
-                    yield (obs_tensor, memory_features, action.copy(), 0)
+                    
+                    buffer['obs'].append(obs_tensor)
+                    buffer['memory'].append(memory_features)
+                    buffer['action'].append(action.copy())
                 else:
                     obs_tensor = obs_1.as_tensor().astype(np.float32, copy=True)
                     memory_features = memory_1.get_memory_features().astype(np.float32, copy=True)
-                    yield (obs_tensor, memory_features, action.copy(), 1)
-            
+                    
+                    buffer['obs'].append(obs_tensor)
+                    buffer['memory'].append(memory_features)
+                    buffer['action'].append(action.copy())
+                
+                # If buffer is full, yield the sequence and clear it
+                if len(buffer['obs']) >= self.sequence_len:
+                    yield (
+                        np.stack(buffer['obs']),    # (Seq, C, H, W)
+                        np.stack(buffer['memory']), # (Seq, C, H, W)
+                        np.stack(buffer['action']), # (Seq, 5)
+                        player_idx
+                    )
+                    # Clear buffer to start collecting the next chunk
+                    buffer['obs'] = []
+                    buffer['memory'] = []
+                    buffer['action'] = []
+
             actions = {
                 "player_0": np.array([1, 0, 0, 0, 0], dtype=np.int8),
                 "player_1": np.array([1, 0, 0, 0, 0], dtype=np.int8),
@@ -278,6 +368,7 @@ def create_iterable_dataloader(
     max_replays: int | None = None,
     min_stars: int = 70,
     max_turns: int = 500,
+    sequence_len: int = 32,
 ) -> DataLoader:
     dataset = GeneralsReplayIterableDataset(
         data_dir=data_dir,
@@ -285,11 +376,13 @@ def create_iterable_dataloader(
         max_replays=max_replays,
         min_stars=min_stars,
         max_turns=max_turns,
+        sequence_len=sequence_len,
+        batch_size=batch_size,
     )
     
     return DataLoader(
         dataset,
-        batch_size=batch_size,
+        batch_size=None, # Disable auto-batching, dataset yields batches
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=num_workers > 0,

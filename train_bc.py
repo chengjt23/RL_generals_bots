@@ -119,24 +119,27 @@ class BehaviorCloningTrainer:
         # Create persistent iterator for resuming
         self.train_iterator = iter(self.train_loader)
         
-        val_dataset = GeneralsReplayDataset(
+        # Use IterableDataset for validation as well to support stateful replay
+        # But we want to iterate over full replays sequentially
+        # So we use a batch size of 1 (one replay at a time) or manage streams
+        # For simplicity, let's use the same iterable dataloader but with batch_size=1
+        # This way we can validate on full sequences (chunks of 32, but from same game)
+        # Actually, to validate on FULL replays, we should just iterate through replays one by one
+        # and feed chunks.
+        
+        self.val_loader = create_iterable_dataloader(
             data_dir=data_config['data_dir'],
+            batch_size=1, # Validate one game at a time (or one stream)
             grid_size=data_config['grid_size'],
+            num_workers=1, # Single worker for validation
             max_replays=val_replays,
             min_stars=data_config['min_stars'],
             max_turns=data_config['max_turns'],
-        )
-        
-        self.val_loader = torch.utils.data.DataLoader(
-            val_dataset,
-            batch_size=train_config['batch_size'],
-            shuffle=False,
-            num_workers=train_config['num_workers'],
-            pin_memory=True,
+            sequence_len=32, # Still chunk for memory, but we maintain state
         )
         
         print(f"Train replays (streaming): {train_replays}")
-        print(f"Val samples: {len(val_dataset)}")
+        print(f"Val replays (streaming): {val_replays}")
     
     def setup_optimizer(self):
         opt_config = self.config['optimizer']
@@ -185,8 +188,17 @@ class BehaviorCloningTrainer:
         self.early_stopping_counter = 0
     
     def compute_loss(self, obs, actions, policy_logits):
+        # obs shape: (B, T, C, H, W)
+        # actions shape: (B, T, 5)
+        # policy_logits shape: (B, T, 9, H, W)
+        
         batch_size = obs.shape[0]
+        seq_len = obs.shape[1]
         grid_size = self.config['model']['grid_size']
+        
+        # Flatten batch and time dimensions for loss computation
+        # actions: (B*T, 5)
+        actions = actions.view(-1, 5)
         
         pass_flag = actions[:, 0]
         row = actions[:, 1]
@@ -194,13 +206,16 @@ class BehaviorCloningTrainer:
         direction = actions[:, 3]
         split = actions[:, 4]
         
-        policy_logits_reshaped = policy_logits.view(batch_size, 9, grid_size, grid_size)
+        # policy_logits: (B*T, 9, H, W)
+        policy_logits_reshaped = policy_logits.view(batch_size * seq_len, 9, grid_size, grid_size)
         
         pass_logits = policy_logits_reshaped[:, 0, 0, 0]
-        action_logits = policy_logits_reshaped[:, 1:, :, :].permute(0, 2, 3, 1).reshape(batch_size, -1, 8)
+        action_logits = policy_logits_reshaped[:, 1:, :, :].permute(0, 2, 3, 1).reshape(batch_size * seq_len, -1, 8)
         
         losses = []
-        for i in range(batch_size):
+        total_samples = batch_size * seq_len
+        
+        for i in range(total_samples):
             if pass_flag[i] == 1:
                 target = torch.zeros(1 + grid_size * grid_size * 8, device=self.device)
                 target[0] = 1.0
@@ -234,6 +249,10 @@ class BehaviorCloningTrainer:
         total_loss = 0.0
         num_batches = 0
         
+        # Reset hidden state at the beginning of each epoch
+        # Or keep it if we assume continuity across epochs (unlikely for infinite iterator)
+        self.hidden_state = None
+        
         pbar = tqdm(
             range(self.steps_per_epoch),
             desc=f"Epoch {epoch}/{self.config['training']['num_epochs']} [Train]",
@@ -241,23 +260,53 @@ class BehaviorCloningTrainer:
             leave=False,
         )
         
+        # Hidden state management for TBPTT
+        # We don't have explicit episode boundaries in the current dataloader batching
+        # The dataloader yields random chunks from different games.
+        # Ideally, we should maintain hidden states if we were iterating through specific episodes.
+        # However, since our dataloader yields independent chunks (shuffled), 
+        # we must initialize hidden state to zero for each batch.
+        # This is "Truncated BPTT" where we only backprop within the chunk.
+        # To do true stateful TBPTT across chunks, the dataloader needs to be stateful per worker/batch index.
+        # Given the current dataloader design (random chunks), we reset hidden state every batch.
+        
         for _ in pbar:
             try:
-                obs, memory, actions, _ = next(self.train_iterator)
+                obs, memory, actions, reset_mask = next(self.train_iterator)
             except StopIteration:
                 # Should not happen with infinite iterator, but just in case
                 self.train_iterator = iter(self.train_loader)
-                obs, memory, actions, _ = next(self.train_iterator)
+                obs, memory, actions, reset_mask = next(self.train_iterator)
                 
             obs = obs.to(self.device)
             memory = memory.to(self.device)
             actions = actions.to(self.device)
+            reset_mask = reset_mask.to(self.device)
             
             self.optimizer.zero_grad()
             
+            # Initialize hidden state if needed
+            if self.hidden_state is None:
+                # We need to know the hidden dim from the model
+                # Assuming model.backbone.conv_lstm.hidden_dim is accessible or we infer from batch
+                # But simpler: let the model init it if None, then we maintain it.
+                # However, we need to reset specific batch elements based on reset_mask
+                pass
+            
+            # If we have a hidden state, we must reset the parts where new games started
+            if self.hidden_state is not None:
+                h, c = self.hidden_state
+                # reset_mask is (B,), we need to expand to (B, C, H, W)
+                # h shape: (B, C, H, W)
+                mask_expanded = reset_mask.view(-1, 1, 1, 1).expand_as(h)
+                h = h * (~mask_expanded)
+                c = c * (~mask_expanded)
+                self.hidden_state = (h, c)
+            
             if self.scaler is not None:
                 with autocast():
-                    policy_logits, _ = self.model(obs, memory)
+                    # Forward pass with time dimension
+                    policy_logits, _, new_hidden_state = self.model(obs, memory, self.hidden_state)
                     loss = self.compute_loss(obs, actions, policy_logits)
                 
                 self.scaler.scale(loss).backward()
@@ -269,7 +318,7 @@ class BehaviorCloningTrainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                policy_logits, _ = self.model(obs, memory)
+                policy_logits, _, new_hidden_state = self.model(obs, memory, self.hidden_state)
                 loss = self.compute_loss(obs, actions, policy_logits)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
@@ -277,6 +326,10 @@ class BehaviorCloningTrainer:
                     self.config['training']['gradient_clip']
                 )
                 self.optimizer.step()
+            
+            # Detach hidden state for TBPTT
+            h, c = new_hidden_state
+            self.hidden_state = (h.detach(), c.detach())
             
             self.scheduler.step()
             
@@ -305,24 +358,56 @@ class BehaviorCloningTrainer:
     @torch.no_grad()
     def validate(self):
         self.model.eval()
-        total_loss = 0.0
-        num_batches = 0
+        # Validation iterator
+        val_iterator = iter(self.val_loader)
+        
+        # We need to maintain hidden state for validation stream
+        # Since batch_size=1, hidden_state is (1, C, H, W)
+        val_hidden_state = None
+        
+        # We'll validate for a fixed number of steps or until dataset exhaustion
+        # Since it's an iterable dataset, we can just run for some steps
+        # Or better, since we know val_replays, we can estimate steps
+        # But for now let's just run for a fixed number of batches (chunks)
+        # to get a representative loss.
+        # Assuming avg game length 300, seq_len 32 -> ~10 chunks per game
+        # If we have 100 val replays -> 1000 chunks
+        
+        val_steps = 1000 # Adjust based on dataset size
         
         pbar = tqdm(
-            self.val_loader,
+            range(val_steps),
             desc="Validation",
-            unit="batch",
+            unit="chunk",
             ncols=120,
             leave=False
         )
         
-        for obs, memory, actions, _ in pbar:
+        for _ in pbar:
+            try:
+                obs, memory, actions, reset_mask = next(val_iterator)
+            except StopIteration:
+                break
+                
             obs = obs.to(self.device)
             memory = memory.to(self.device)
             actions = actions.to(self.device)
+            reset_mask = reset_mask.to(self.device)
             
-            policy_logits, _ = self.model(obs, memory)
+            # Reset hidden state if new game
+            if val_hidden_state is not None:
+                h, c = val_hidden_state
+                mask_expanded = reset_mask.view(-1, 1, 1, 1).expand_as(h)
+                h = h * (~mask_expanded)
+                c = c * (~mask_expanded)
+                val_hidden_state = (h, c)
+            
+            # Forward pass with state
+            policy_logits, _, new_hidden_state = self.model(obs, memory, val_hidden_state)
             loss = self.compute_loss(obs, actions, policy_logits)
+            
+            # Update state
+            val_hidden_state = new_hidden_state
             
             total_loss += loss.item()
             num_batches += 1
@@ -330,6 +415,9 @@ class BehaviorCloningTrainer:
             avg_loss = total_loss / num_batches
             pbar.set_postfix({'val_loss': f"{avg_loss:.4f}"})
         
+        if num_batches == 0:
+            return 0.0
+            
         final_avg_loss = total_loss / num_batches
         
         if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
