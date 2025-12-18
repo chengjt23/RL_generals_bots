@@ -158,42 +158,35 @@ class GeneralsReplayIterableDataset(IterableDataset):
                 iterator = tqdm(iterator, desc=f"Worker {w_id} Init", position=w_id, leave=False)
             
             for i in iterator:
-                is_new_game = False
-                
-                if streams[i] is None:
-                    try:
-                        # print(f"Worker {w_id}: Fetching new replay for stream {i}")
-                        replay, target_player = next(replay_source)
-                        streams[i] = self._extract_samples_from_replay(replay, target_player)
-                        is_new_game = True
-                    except StopIteration:
-                        continue
-                
-                try:
-                    sample = next(streams[i])
-                    obs, memory, action, _ = sample
+                # Ensure we get a sample for this slot
+                while True:
+                    is_new_game = False
                     
-                    batch_obs.append(obs)
-                    batch_memory.append(memory)
-                    batch_actions.append(action)
-                    reset_mask.append(is_new_game)
+                    if streams[i] is None:
+                        try:
+                            replay, target_player = next(replay_source)
+                            streams[i] = self._extract_samples_from_replay(replay, target_player)
+                            is_new_game = True
+                        except StopIteration:
+                            continue
                     
-                except StopIteration:
                     try:
-                        # print(f"Worker {w_id}: Stream {i} finished. Fetching next replay.")
-                        replay, target_player = next(replay_source)
-                        streams[i] = self._extract_samples_from_replay(replay, target_player)
-                        is_new_game = True
-                        
                         sample = next(streams[i])
                         obs, memory, action, _ = sample
                         
                         batch_obs.append(obs)
                         batch_memory.append(memory)
                         batch_actions.append(action)
+                        
+                        # If we just started a new game (or switched to a new one), reset mask is True
+                        # Note: if we had a stream, it finished, and we got a new one in the same slot,
+                        # is_new_game will be True, which is correct.
                         reset_mask.append(is_new_game)
+                        break # Successfully filled slot i
+                        
                     except StopIteration:
-                        continue
+                        streams[i] = None
+                        # Loop continues to get a new replay for this slot
             
             if len(batch_obs) == worker_batch_size:
                 first_batch = False

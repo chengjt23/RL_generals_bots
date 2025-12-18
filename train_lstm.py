@@ -303,7 +303,8 @@ class LSTMOnlyTrainer:
             try:
                 # print(f"DEBUG: Waiting for batch {i}")
                 obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
-                # print(f"DEBUG: Got batch {i} from worker {worker_id.item()}")
+                if i % 100 == 0:
+                    print(f"DEBUG: Got batch {i} from worker {worker_id.item()}")
             except StopIteration:
                 self.train_iterator = iter(self.train_loader)
                 obs, memory, actions, reset_mask, worker_id = next(self.train_iterator)
