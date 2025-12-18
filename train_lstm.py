@@ -68,7 +68,7 @@ class LSTMOnlyTrainer:
         
         # Load checkpoint
         print(f"Loading checkpoint from {self.checkpoint_path}")
-        checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(self.checkpoint_path, map_location=self.device, weights_only=False)
         
         # Handle state dict mismatch
         # The checkpoint might be from the original UNet (no LSTM), so 'backbone.conv_lstm' keys will be missing.
