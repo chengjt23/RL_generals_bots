@@ -18,7 +18,13 @@ def worker(remote, parent_remote, env_config):
             actions_dict = {"Agent": agent_action, "Opponent": opponent_action}
             obs_dict, rewards_dict, terminated, truncated, info = env.step(actions_dict)
             done = terminated or truncated
-            remote.send((obs_dict, rewards_dict, done, info))
+            
+            if done:
+                final_rewards = rewards_dict.copy()
+                obs_dict, _ = env.reset()
+                remote.send((obs_dict, final_rewards, True, info))
+            else:
+                remote.send((obs_dict, rewards_dict, False, info))
         
         elif cmd == 'reset':
             obs_dict, info = env.reset()
@@ -67,11 +73,6 @@ class ParallelEnvs:
         results = [remote.recv() for remote in self.remotes]
         obs_dicts, infos = zip(*results)
         return obs_dicts, infos
-    
-    def reset_single(self, env_idx):
-        self.remotes[env_idx].send(('reset', None))
-        obs_dict, info = self.remotes[env_idx].recv()
-        return obs_dict, info
     
     def close(self):
         for remote in self.remotes:

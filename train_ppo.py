@@ -6,7 +6,6 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
-import copy
 
 from agents.ppo_agent import PPOAgent
 from agents.trajectory_buffer import TrajectoryBuffer
@@ -15,7 +14,7 @@ from agents.parallel_envs import ParallelEnvs
 from agents.reward_shaping import PotentialBasedRewardFn
 from generals.agents import RandomAgent
 from generals.core.observation import Observation
-from generals.core.action import Action
+from generals.core.action import Action, compute_valid_move_mask
 
 try:
     import wandb
@@ -24,13 +23,23 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 
-def action_to_array(action):
+_PASS_ACTION_ARRAY = np.array([1, 0, 0, 0, 0], dtype=np.int32)
+
+def action_to_array(action, out=None):
+    if out is None:
+        out = np.empty(5, dtype=np.int32)
     try:
         if action.row is not None:
-            return np.array([0, action.row, action.col, action.direction, int(action.split)], dtype=np.int32)
+            out[0] = 0
+            out[1] = action.row
+            out[2] = action.col
+            out[3] = action.direction
+            out[4] = int(action.split)
+            return out
     except (AttributeError, TypeError):
         pass
-    return np.array([1, 0, 0, 0, 0], dtype=np.int32)
+    out[:] = _PASS_ACTION_ARRAY
+    return out
 
 
 class PPOTrainer:
@@ -90,7 +99,17 @@ class PPOTrainer:
     def setup_envs(self):
         n_envs = self.config['training']['n_parallel_envs']
         self.envs = ParallelEnvs(n_envs)
-        self.agent_memories = [copy.deepcopy(self.agent.memory) for _ in range(n_envs)]
+        self.agent_memories = [self.agent.memory.clone() for _ in range(n_envs)]
+        
+        grid_size = self.config['model']['grid_size']
+        obs_channels = self.config['model']['obs_channels']
+        memory_channels = self.config['model']['memory_channels']
+        
+        self._obs_buffer = torch.zeros((n_envs, obs_channels, grid_size, grid_size), dtype=torch.float32, pin_memory=True)
+        self._mem_buffer = torch.zeros((n_envs, memory_channels, grid_size, grid_size), dtype=torch.float32, pin_memory=True)
+        
+        self._opp_obs_buffer = torch.zeros((n_envs, obs_channels, grid_size, grid_size), dtype=torch.float32, pin_memory=True)
+        self._opp_mem_buffer = torch.zeros((n_envs, memory_channels, grid_size, grid_size), dtype=torch.float32, pin_memory=True)
     
     def setup_buffer(self):
         grid_size = self.config['model']['grid_size']
@@ -104,6 +123,7 @@ class PPOTrainer:
             n_envs=n_envs,
             obs_shape=(obs_channels, grid_size, grid_size),
             memory_shape=(memory_channels, grid_size, grid_size),
+            grid_size=grid_size,
             device=self.device
         )
     
@@ -144,12 +164,37 @@ class PPOTrainer:
         else:
             self.use_wandb = False
     
+    def _build_opponent_groups(self, current_opponents, opponent_memories):
+        network_groups = {}
+        random_env_indices = []
+        
+        for env_idx, opponent in enumerate(current_opponents):
+            if hasattr(opponent, 'network') and opponent_memories[env_idx] is not None:
+                network_id = id(opponent.network)
+                if network_id not in network_groups:
+                    network_groups[network_id] = {
+                        'network': opponent.network,
+                        'env_indices': [],
+                        'opponents': [],
+                        'memories': []
+                    }
+                network_groups[network_id]['env_indices'].append(env_idx)
+                network_groups[network_id]['opponents'].append(opponent)
+                network_groups[network_id]['memories'].append(opponent_memories[env_idx])
+            else:
+                random_env_indices.append(env_idx)
+        
+        return network_groups, random_env_indices
+    
     def collect_trajectories(self):
+        self.agent.network.eval() # 强制进入评估模式
         n_steps = self.config['training']['n_steps_per_update']
         n_envs = self.config['training']['n_parallel_envs']
         max_episode_steps = self.config['training']['max_episode_steps']
+        grid_size = self.agent.grid_size
         
         obs_dicts, infos = self.envs.reset()
+        obs_dicts = list(obs_dicts)
         
         current_opponents = []
         opponent_indices = []
@@ -164,104 +209,127 @@ class PPOTrainer:
             current_opponents.append(opponent)
             opponent_indices.append(idx)
             if hasattr(opponent, 'memory'):
-                opponent_memories.append(copy.deepcopy(opponent.memory))
+                opponent_memories.append(opponent.memory.clone())
             else:
                 opponent_memories.append(None)
         
         for mem in self.agent_memories:
             mem.reset()
         
-        episode_steps = [0] * n_envs
-        episode_rewards = [0.0] * n_envs
+        episode_steps = np.zeros(n_envs, dtype=np.int32)
+        episode_rewards = np.zeros(n_envs, dtype=np.float32)
         episode_results = []
-        prior_observations = [obs_dict["Agent"] for obs_dict in obs_dicts]
         
-        # Track last actions and observation snapshots for memory updates
         agent_last_actions = [None] * n_envs
         agent_prev_obs_snapshots = [None] * n_envs
+        agent_prev_actions = [Action(to_pass=True)] * n_envs
+        
+        network_groups, random_env_indices = self._build_opponent_groups(current_opponents, opponent_memories)
+        
+        _pass_action = Action(to_pass=True)
+        action_array_buf = np.empty(5, dtype=np.int32)
         
         for step in range(n_steps):
             observations = [obs_dicts[env_idx]["Agent"] for env_idx in range(n_envs)]
+            prior_observations = observations
             
-            # Infer opponent actions for memory update
-            opponent_last_actions = []
-            for env_idx in range(n_envs):
-                obs = observations[env_idx]
-                if agent_prev_obs_snapshots[env_idx] is not None:
-                    opp_action = self.agent._infer_opponent_action(agent_prev_obs_snapshots[env_idx], obs)
-                else:
-                    opp_action = Action(to_pass=True)
-                opponent_last_actions.append(opp_action)
+            opponent_last_actions = [
+                self.agent._infer_opponent_action(agent_prev_obs_snapshots[i], observations[i])
+                if agent_prev_obs_snapshots[i] is not None else _pass_action
+                for i in range(n_envs)
+            ]
             
-            agent_actions, agent_log_probs, agent_values = self.agent.act_with_value_batch(
+            agent_actions, agent_log_probs, agent_values, obs_tensors, memory_tensors = self.agent.act_with_value_batch_fast(
                 observations, 
                 self.agent_memories,
+                self._obs_buffer,
+                self._mem_buffer,
+                self.device,
                 prev_obs_snapshots=agent_prev_obs_snapshots,
                 last_actions=agent_last_actions,
                 opponent_last_actions=opponent_last_actions
             )
             
-            obs_tensors = []
-            memory_tensors = []
-            for env_idx in range(n_envs):
-                obs_tensor = observations[env_idx].as_tensor().astype(np.float32)
-                memory_tensor = self.agent_memories[env_idx].get_memory_features()
-                obs_tensors.append(obs_tensor)
-                memory_tensors.append(memory_tensor)
+            opponent_actions = [None] * n_envs
             
-            opponent_actions = []
+            for group in network_groups.values():
+                env_indices = group['env_indices']
+                if not env_indices:
+                    continue
+                
+                opp_obs_list = [obs_dicts[env_idx]["Opponent"] for env_idx in env_indices]
+                for idx, (i, env_idx) in enumerate(zip(range(len(env_indices)), env_indices)):
+                    obs = opp_obs_list[i]
+                    obs.pad_observation(pad_to=grid_size)
+                    obs_np = obs.as_tensor().astype(np.float32)
+                    mem_np = group['memories'][i].get_memory_features()
+                    self._opp_obs_buffer[idx].copy_(torch.from_numpy(obs_np))
+                    self._opp_mem_buffer[idx].copy_(torch.from_numpy(mem_np))
+                
+                group_size = len(env_indices)
+                obs_batch = self._opp_obs_buffer[:group_size].to(self.device, non_blocking=True)
+                mem_batch = self._opp_mem_buffer[:group_size].to(self.device, non_blocking=True)
+                
+                with torch.no_grad():
+                    policy_logits_batch, _ = group['network'](obs_batch, mem_batch)
+                
+                for i, env_idx in enumerate(env_indices):
+                    opponent = group['opponents'][i]
+                    obs = opp_obs_list[i]
+                    mem = group['memories'][i]
+                    
+                    if hasattr(opponent, 'opponent_last_action'):
+                        opponent.opponent_last_action = agent_prev_actions[env_idx]
+                    
+                    opp_action = opponent._sample_action(policy_logits_batch[i], obs)
+                    
+                    if opponent.last_action is not None:
+                        mem.update(
+                            opponent._obs_to_dict(obs),
+                            np.asarray(opponent.last_action, dtype=np.int8),
+                            np.asarray(opponent.opponent_last_action, dtype=np.int8),
+                        )
+                    
+                    opponent.last_action = opp_action
+                    opponent_actions[env_idx] = opp_action
             
-            for env_idx, opponent in enumerate(current_opponents):
-                if opponent_memories[env_idx] is not None:
-                    opponent.memory = opponent_memories[env_idx]
-                    opp_action = opponent.act(obs_dicts[env_idx]["Opponent"])
-                    opponent_memories[env_idx] = copy.deepcopy(opponent.memory)
-                else:
-                    opp_action = opponent.act(obs_dicts[env_idx]["Opponent"])
-                opponent_actions.append(opp_action)
+            for env_idx in random_env_indices:
+                opponent_actions[env_idx] = current_opponents[env_idx].act(obs_dicts[env_idx]["Opponent"])
 
             next_obs_dicts, rewards_dicts, dones, next_infos = self.envs.step(agent_actions, opponent_actions)
+            next_obs_dicts = list(next_obs_dicts)
 
-            # Track which environments were reset in this step
-            reset_envs = set()
+            next_agent_obs = [next_obs_dicts[i]["Agent"] for i in range(n_envs)]
+            rewards = self.reward_fn.compute_batch(prior_observations, next_agent_obs)
+
+            reset_envs = []
             
             for env_idx in range(n_envs):
-                reward = self.reward_fn(
-                    prior_observations[env_idx],
-                    agent_actions[env_idx],
-                    next_obs_dicts[env_idx]["Agent"]
-                )
+                action_to_array(agent_actions[env_idx], action_array_buf)
                 
-                action_array = action_to_array(agent_actions[env_idx])
+                obs = observations[env_idx]
+                obs.pad_observation(pad_to=grid_size)
+                valid_mask = compute_valid_move_mask(obs)
                 
                 self.buffer.store_transition(
-                    step,
-                    env_idx,
+                    step, env_idx,
                     obs_tensors[env_idx],
                     memory_tensors[env_idx],
-                    action_array,
+                    action_array_buf.copy(),
                     agent_log_probs[env_idx],
                     agent_values[env_idx],
-                    reward,
+                    rewards[env_idx],
                     float(dones[env_idx]),
-                    observation_obj=observations[env_idx]  # Store Observation object for accurate log_prob calculation
+                    valid_mask=valid_mask
                 )
                 
-                episode_rewards[env_idx] += reward
+                episode_rewards[env_idx] += rewards[env_idx]
                 episode_steps[env_idx] += 1
                 
                 if dones[env_idx] or episode_steps[env_idx] >= max_episode_steps:
-                    agent_reward = rewards_dicts[env_idx]["Agent"]
-                    opp_reward = rewards_dicts[env_idx]["Opponent"]
-                    agent_won = agent_reward > opp_reward
-                    
                     if opponent_indices[env_idx] is not None:
+                        agent_won = rewards_dicts[env_idx]["Agent"] > rewards_dicts[env_idx]["Opponent"]
                         episode_results.append((opponent_indices[env_idx], agent_won))
-                    
-                    reset_obs, reset_info = self.envs.reset_single(env_idx)
-                    obs_dicts = list(obs_dicts)
-                    obs_dicts[env_idx] = reset_obs
-                    obs_dicts = tuple(obs_dicts)
                     
                     opponent, idx = self.opponent_pool.sample_opponent()
                     if opponent is None:
@@ -271,54 +339,37 @@ class PPOTrainer:
                         opponent.reset()
                     current_opponents[env_idx] = opponent
                     opponent_indices[env_idx] = idx
-                    if hasattr(opponent, 'memory'):
-                        opponent_memories[env_idx] = copy.deepcopy(opponent.memory)
-                    else:
-                        opponent_memories[env_idx] = None
+                    opponent_memories[env_idx] = opponent.memory.clone() if hasattr(opponent, 'memory') else None
                     
                     self.agent_memories[env_idx].reset()
                     agent_last_actions[env_idx] = None
                     agent_prev_obs_snapshots[env_idx] = None
-                    
+                    agent_prev_actions[env_idx] = Action(to_pass=True)
                     episode_steps[env_idx] = 0
                     episode_rewards[env_idx] = 0.0
-                    
-                    reset_envs.add(env_idx)  # Mark this environment as reset
+                    reset_envs.append(env_idx)
+                else:
+                    agent_last_actions[env_idx] = agent_actions[env_idx]
+                    agent_prev_obs_snapshots[env_idx] = self.agent._snapshot_observation(next_obs_dicts[env_idx]["Agent"])
+                    agent_prev_actions[env_idx] = agent_actions[env_idx]
+            
+            if reset_envs:
+                network_groups, random_env_indices = self._build_opponent_groups(current_opponents, opponent_memories)
             
             obs_dicts = next_obs_dicts
-            prior_observations = [obs_dict["Agent"] for obs_dict in obs_dicts]
-            
-            # Update last actions and observation snapshots for next step
-            # Note: Skip environments that were reset (they already have None set)
-            for env_idx in range(n_envs):
-                if env_idx not in reset_envs:
-                    # Environment didn't reset, update with current step's action and next observation
-                    agent_last_actions[env_idx] = agent_actions[env_idx]
-                    # Use next observation (after step) for snapshot, used to infer opponent action in next step
-                    agent_prev_obs_snapshots[env_idx] = self.agent._snapshot_observation(prior_observations[env_idx])
-                # If reset, last_actions and prev_obs_snapshots remain None (already set above)
         
-        last_observations = [obs_dicts[env_idx]["Agent"] for env_idx in range(n_envs)]
+        last_observations = [obs_dicts[i]["Agent"] for i in range(n_envs)]
+        for obs in last_observations:
+            obs.pad_observation(pad_to=grid_size)
         
-        obs_tensors = []
-        memory_tensors = []
-        for i in range(n_envs):
-            obs = last_observations[i]
-            obs.pad_observation(pad_to=self.agent.grid_size)
-            obs_tensor = torch.from_numpy(obs.as_tensor()).float()
-            obs_tensors.append(obs_tensor)
-            
-            memory_tensor = torch.from_numpy(self.agent_memories[i].get_memory_features()).float()
-            memory_tensors.append(memory_tensor)
+        obs_batch = torch.stack([torch.from_numpy(obs.as_tensor()).float() for obs in last_observations]).to(self.device)
+        memory_batch = torch.stack([torch.from_numpy(self.agent_memories[i].get_memory_features()).float() for i in range(n_envs)]).to(self.device)
         
-        obs_batch = torch.stack(obs_tensors).to(self.agent.device)
-        memory_batch = torch.stack(memory_tensors).to(self.agent.device)
         with torch.no_grad():
             _, values_batch = self.agent.network(obs_batch, memory_batch)
         last_values = values_batch.squeeze(-1).cpu().numpy()
         
-        last_step_dones = self.buffer.dones[self.buffer.n_steps - 1]
-        last_values = last_values * (1.0 - last_step_dones)
+        last_values = last_values * (1.0 - self.buffer.dones[n_steps - 1])
         
         self.buffer.finish_trajectory(
             last_values,
@@ -326,7 +377,7 @@ class PPOTrainer:
             gae_lambda=self.config['training']['gae_lambda']
         )
         
-        return episode_rewards, episode_results
+        return episode_rewards.tolist(), episode_results
     
     def ppo_update(self):
         clip_epsilon = self.config['training']['clip_epsilon']
@@ -342,6 +393,9 @@ class PPOTrainer:
         total_entropy = 0.0
         n_updates = 0
         
+        self.buffer.prepare_for_training()
+        self.agent.network.eval()
+        
         for epoch in range(ppo_epochs):
             for batch in self.buffer.get_batches(batch_size):
                 obs = batch['observations']
@@ -351,16 +405,31 @@ class PPOTrainer:
                 old_values = batch['values']
                 advantages = batch['advantages']
                 returns = batch['returns']
-                observation_objects = batch.get('observation_objects', None)  # Get Observation objects if available
                 
-                new_log_probs, new_values, entropies = self.agent.evaluate_actions(
-                    obs, mem, actions, observations=observation_objects
-                )
+                # raw_adv_mean = advantages.abs().mean().item()
+                # raw_adv_max = advantages.abs().max().item()
+                # print(f"[DIAGNOSIS] Advantage - Mean: {raw_adv_mean:.4f}, Max: {raw_adv_max:.4f}")
                 
-                if torch.any(torch.isnan(new_log_probs)) or torch.any(torch.isinf(new_log_probs)):
-                    raise ValueError("NaN or Inf detected in new_log_probs")
+                advantages = torch.clamp(advantages, -2.0, 2.0)
+                
+                # advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                
+                valid_masks = batch.get('valid_masks', None)
+                vm_tensor = None
+                if valid_masks is not None:
+                    vm_tensor = valid_masks.permute(0, 3, 1, 2)
+                    vm_tensor = vm_tensor.repeat_interleave(2, dim=1)
+                
+                new_log_probs, new_values, entropies = self.agent.evaluate_actions(obs, mem, actions, valid_masks=vm_tensor)
                 
                 ratio = torch.exp(new_log_probs - old_log_probs)
+                
+                # with torch.no_grad():
+                #     r_max = ratio.max().item()
+                #     r_min = ratio.min().item()
+                #     if r_max > 1.5 or r_min < 0.5:
+                #         print(f"[NUMERICAL CHECK] Ratio Shock! Max: {r_max:.4f}, Min: {r_min:.4f}")
+                
                 surr1 = ratio * advantages
                 surr2 = torch.clamp(ratio, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * advantages
                 policy_loss = -torch.min(surr1, surr2).mean()
@@ -379,11 +448,56 @@ class PPOTrainer:
                 
                 entropy = entropies.mean()
                 
-                loss = policy_loss + value_loss_coef * value_loss - entropy_coef * entropy
+                loss = policy_loss + value_loss_coef * value_loss - entropy_coef * entropy 
+                # loss = value_loss_coef * value_loss - entropy_coef * entropy
+                # print(f"policy_loss: {policy_loss}")
+                # print(f"value_loss: {value_loss_coef * value_loss}")
+                # print(f"entropy_loss: {entropy_coef * entropy}")
+                # loss = loss - loss
                 
                 self.optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.agent.network.parameters(), max_grad_norm)
+                
+                # if n_updates == 0:
+                #     print("\n" + "="*50)
+                #     print("FIRST UPDATE GRADIENT AUDIT")
+                #     print("="*50)
+                    
+                #     backbone_grad = 0.0
+                #     policy_grad = 0.0
+                #     value_grad = 0.0
+                    
+                #     for name, param in self.agent.network.named_parameters():
+                #         if param.grad is not None:
+                #             g_norm = param.grad.norm().item()
+                #             p_norm = param.data.norm().item()
+                            
+                #             update_ratio = g_norm / (p_norm + 1e-8)
+                            
+                #             if 'backbone' in name:
+                #                 backbone_grad += g_norm
+                #             elif 'policy_head' in name:
+                #                 policy_grad += g_norm
+                #             elif 'value_head' in name:
+                #                 value_grad += g_norm
+
+                #             if update_ratio > 0.05:
+                #                 print(f"[SHOCK ALERT] Layer: {name:30} | Grad: {g_norm:.6f} | Ratio: {update_ratio:.4f}")
+
+                #     print("-" * 50)
+                #     print(f"Total Backbone Grad Norm: {backbone_grad:.6f}")
+                #     print(f"Total Policy Head Grad Norm: {policy_grad:.6f}")
+                #     print(f"Total Value Head Grad Norm: {value_grad:.6f}")
+                    
+                #     has_nan = False
+                #     for p in self.agent.network.parameters():
+                #         if p.grad is not None and torch.any(p.grad.isnan()):
+                #             has_nan = True
+                #             break
+                #     print(f"Gradient Contains NaN: {has_nan}")
+                #     print("="*50 + "\n")
+                
                 self.optimizer.step()
                 
                 total_policy_loss += policy_loss.item()
@@ -413,6 +527,24 @@ class PPOTrainer:
         print(f"Opponent pool warmup: {warmup_iterations} iterations")
         print(f"Opponent pool update frequency: every {pool_update_freq} iterations\n")
         
+        if warmup_iterations == 0:
+            checkpoint_path = self.checkpoint_dir / "pool_agent_initial.pt"
+            torch.save(self.agent.network.state_dict(), checkpoint_path)
+            sota_config = {
+                'obs_channels': self.config['model']['obs_channels'],
+                'memory_channels': self.config['model']['memory_channels'],
+                'grid_size': self.config['model']['grid_size'],
+                'base_channels': self.config['model']['base_channels'],
+            }
+            self.opponent_pool.add_opponent(
+                self.agent,
+                str(checkpoint_path),
+                0,
+                "initial_checkpoint",
+                sota_config=sota_config
+            )
+            print(f"[Opponent Pool] Added initial agent to pool. Pool size: {len(self.opponent_pool)}\n")
+        
         for iteration in tqdm(range(total_iterations), desc="Training"):
             episode_rewards, episode_results = self.collect_trajectories()
             
@@ -428,11 +560,18 @@ class PPOTrainer:
             if iteration > warmup_iterations and iteration % pool_update_freq == 0:
                 checkpoint_path = self.checkpoint_dir / f"pool_agent_{iteration}.pt"
                 torch.save(self.agent.network.state_dict(), checkpoint_path)
+                sota_config = {
+                    'obs_channels': self.config['model']['obs_channels'],
+                    'memory_channels': self.config['model']['memory_channels'],
+                    'grid_size': self.config['model']['grid_size'],
+                    'base_channels': self.config['model']['base_channels'],
+                }
                 self.opponent_pool.add_opponent(
                     self.agent,
                     str(checkpoint_path),
                     iteration,
-                    f"checkpoint_{iteration}"
+                    f"checkpoint_{iteration}",
+                    sota_config=sota_config
                 )
             
             if iteration % log_frequency == 0:

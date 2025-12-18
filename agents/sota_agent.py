@@ -201,6 +201,10 @@ Key	Shape	Description
         all_logits = np.array([pass_logit] + masked_logits)
         probs = torch.softmax(torch.from_numpy(all_logits), dim=0).numpy()
         
+        # top_probs, top_indices = torch.topk(torch.from_numpy(probs), k=5)
+        # print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
+        # print(f"Top 5 Actions Indices: {top_indices.tolist()}")
+        
         choice = np.argmax(probs)
         
         if choice == 0:

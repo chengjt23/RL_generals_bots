@@ -3,15 +3,16 @@ import torch
 
 
 class TrajectoryBuffer:
-    def __init__(self, n_steps, n_envs, obs_shape, memory_shape, device='cuda'):
+    def __init__(self, n_steps, n_envs, obs_shape, memory_shape, grid_size, device='cuda'):
         self.n_steps = n_steps
         self.n_envs = n_envs
         self.device = device
         self.obs_shape = obs_shape
         self.memory_shape = memory_shape
+        self.grid_size = grid_size
         
         self.observations = np.zeros((n_steps, n_envs, *obs_shape), dtype=np.float32)
-        self.observation_objects = [[None] * n_envs for _ in range(n_steps)]  # Store Observation objects for accurate log_prob calculation
+        self.valid_masks = np.zeros((n_steps, n_envs, grid_size, grid_size, 4), dtype=np.bool_)
         self.memories = np.zeros((n_steps, n_envs, *memory_shape), dtype=np.float32)
         self.actions = np.zeros((n_steps, n_envs, 5), dtype=np.int32)
         self.log_probs = np.zeros((n_steps, n_envs), dtype=np.float32)
@@ -22,9 +23,10 @@ class TrajectoryBuffer:
         self.advantages = np.zeros((n_steps, n_envs), dtype=np.float32)
         self.returns = np.zeros((n_steps, n_envs), dtype=np.float32)
     
-    def store_transition(self, step, env_idx, obs, memory, action, log_prob, value, reward, done, observation_obj=None):
+    def store_transition(self, step, env_idx, obs, memory, action, log_prob, value, reward, done, valid_mask=None):
         self.observations[step, env_idx] = obs
-        self.observation_objects[step][env_idx] = observation_obj  # Store Observation object
+        if valid_mask is not None:
+            self.valid_masks[step, env_idx] = valid_mask
         self.memories[step, env_idx] = memory
         self.actions[step, env_idx] = action
         self.log_probs[step, env_idx] = log_prob
@@ -67,49 +69,60 @@ class TrajectoryBuffer:
         if np.any(np.isnan(self.returns)) or np.any(np.isinf(self.returns)):
             raise ValueError("NaN or Inf detected in returns")
     
+    def prepare_for_training(self, normalize_advantages=True):
+        total_samples = self.n_steps * self.n_envs
+        
+        self._obs_flat = self.observations.reshape(total_samples, *self.obs_shape)
+        self._mem_flat = self.memories.reshape(total_samples, *self.memory_shape)
+        self._act_flat = self.actions.reshape(total_samples, 5)
+        self._logp_flat = self.log_probs.reshape(total_samples)
+        self._val_flat = self.values.reshape(total_samples)
+        self._adv_flat = self.advantages.reshape(total_samples).copy()
+        self._ret_flat = self.returns.reshape(total_samples)
+        
+        if normalize_advantages:
+            self._adv_flat = (self._adv_flat - self._adv_flat.mean()) / (self._adv_flat.std() + 1e-8)
+        
+        self._obs_tensor = torch.from_numpy(self._obs_flat).to(self.device)
+        self._mem_tensor = torch.from_numpy(self._mem_flat).to(self.device)
+        self._act_tensor = torch.from_numpy(self._act_flat).to(self.device)
+        self._logp_tensor = torch.from_numpy(self._logp_flat).to(self.device)
+        self._val_tensor = torch.from_numpy(self._val_flat).to(self.device)
+        self._adv_tensor = torch.from_numpy(self._adv_flat).to(self.device)
+        self._ret_tensor = torch.from_numpy(self._ret_flat).to(self.device)
+    
     def get_batches(self, batch_size, normalize_advantages=True):
         total_samples = self.n_steps * self.n_envs
         
-        obs_flat = self.observations.reshape(total_samples, *self.obs_shape)
-        mem_flat = self.memories.reshape(total_samples, *self.memory_shape)
-        act_flat = self.actions.reshape(total_samples, 5)
-        logp_flat = self.log_probs.reshape(total_samples)
-        val_flat = self.values.reshape(total_samples)
-        adv_flat = self.advantages.reshape(total_samples)
-        ret_flat = self.returns.reshape(total_samples)
+        if not hasattr(self, '_obs_tensor'):
+            self.prepare_for_training(normalize_advantages)
         
-        # Flatten observation objects
-        obs_objs_flat = []
-        for step in range(self.n_steps):
-            for env_idx in range(self.n_envs):
-                obs_objs_flat.append(self.observation_objects[step][env_idx])
+        valid_masks_flat = self.valid_masks.reshape(total_samples, self.grid_size, self.grid_size, 4)
+        valid_masks_tensor = torch.from_numpy(valid_masks_flat).to(self.device)
         
-        if normalize_advantages:
-            adv_flat = (adv_flat - adv_flat.mean()) / (adv_flat.std() + 1e-8)
-        
-        indices = np.arange(total_samples)
-        np.random.shuffle(indices)
+        indices = torch.randperm(total_samples, device=self.device)
         
         for start in range(0, total_samples, batch_size):
-            end = start + batch_size
+            end = min(start + batch_size, total_samples)
             batch_indices = indices[start:end]
             
-            # Get observation objects for this batch
-            batch_obs_objs = [obs_objs_flat[idx] for idx in batch_indices]
+            batch_valid_masks = valid_masks_tensor[batch_indices]
             
-            batch = {
-                'observations': torch.from_numpy(obs_flat[batch_indices]).to(self.device),
-                'memories': torch.from_numpy(mem_flat[batch_indices]).to(self.device),
-                'actions': torch.from_numpy(act_flat[batch_indices]).to(self.device),
-                'log_probs': torch.from_numpy(logp_flat[batch_indices]).to(self.device),
-                'values': torch.from_numpy(val_flat[batch_indices]).to(self.device),
-                'advantages': torch.from_numpy(adv_flat[batch_indices]).to(self.device),
-                'returns': torch.from_numpy(ret_flat[batch_indices]).to(self.device),
-                'observation_objects': batch_obs_objs,  # Include Observation objects
+            yield {
+                'observations': self._obs_tensor[batch_indices],
+                'memories': self._mem_tensor[batch_indices],
+                'actions': self._act_tensor[batch_indices],
+                'log_probs': self._logp_tensor[batch_indices],
+                'values': self._val_tensor[batch_indices],
+                'advantages': self._adv_tensor[batch_indices],
+                'returns': self._ret_tensor[batch_indices],
+                'valid_masks': batch_valid_masks,
             }
-            
-            yield batch
     
     def clear(self):
-        pass
+        if hasattr(self, '_obs_tensor'):
+            del self._obs_tensor, self._mem_tensor, self._act_tensor
+            del self._logp_tensor, self._val_tensor, self._adv_tensor, self._ret_tensor
+            del self._obs_flat, self._mem_flat, self._act_flat
+            del self._logp_flat, self._val_flat, self._adv_flat, self._ret_flat
 

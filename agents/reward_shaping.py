@@ -18,6 +18,7 @@ class PotentialBasedRewardFn(RewardFn):
         self.castle_weight = castle_weight
         self.max_ratio = max_ratio
         self.gamma = gamma
+        self._log_max_ratio = np.log(max_ratio)
     
     def _compute_potential(self, obs: Observation) -> float:
         agent_land = obs.owned_land_count
@@ -34,21 +35,11 @@ class PotentialBasedRewardFn(RewardFn):
         army_ratio = (agent_army + epsilon) / (enemy_army + epsilon)
         castle_ratio = (agent_castles + 1) / (enemy_castles + 1)
         
-        phi_land = np.log(land_ratio) / np.log(self.max_ratio)
-        phi_army = np.log(army_ratio) / np.log(self.max_ratio)
-        phi_castle = np.log(castle_ratio) / np.log(self.max_ratio)
+        phi_land = np.clip(np.log(land_ratio) / self._log_max_ratio, -1.0, 1.0)
+        phi_army = np.clip(np.log(army_ratio) / self._log_max_ratio, -1.0, 1.0)
+        phi_castle = np.clip(np.log(castle_ratio) / self._log_max_ratio, -1.0, 1.0)
         
-        phi_land = np.clip(phi_land, -1.0, 1.0)
-        phi_army = np.clip(phi_army, -1.0, 1.0)
-        phi_castle = np.clip(phi_castle, -1.0, 1.0)
-        
-        potential = (
-            self.land_weight * phi_land +
-            self.army_weight * phi_army +
-            self.castle_weight * phi_castle
-        )
-        
-        return float(potential)
+        return self.land_weight * phi_land + self.army_weight * phi_army + self.castle_weight * phi_castle
     
     def __call__(self, prior_obs: Observation, prior_action: Action, obs: Observation) -> float:
         agent_generals = (obs.generals & obs.owned_cells).sum()
@@ -64,7 +55,27 @@ class PotentialBasedRewardFn(RewardFn):
         potential_current = self._compute_potential(obs)
         potential_prior = self._compute_potential(prior_obs)
         
-        shaped_reward = original_reward + self.gamma * potential_current - potential_prior
+        return original_reward + self.gamma * potential_current - potential_prior
+    
+    def compute_batch(self, prior_obs_list, next_obs_list):
+        n = len(prior_obs_list)
+        rewards = np.empty(n, dtype=np.float32)
         
-        return shaped_reward
+        for i in range(n):
+            prior_obs = prior_obs_list[i]
+            obs = next_obs_list[i]
+            
+            agent_generals = (obs.generals & obs.owned_cells).sum()
+            prior_generals = (prior_obs.generals & prior_obs.owned_cells).sum()
+            
+            if agent_generals > prior_generals:
+                original_reward = 1.0
+            elif agent_generals < prior_generals:
+                original_reward = -1.0
+            else:
+                original_reward = 0.0
+            
+            rewards[i] = original_reward + self.gamma * self._compute_potential(obs) - self._compute_potential(prior_obs)
+        
+        return rewards
 

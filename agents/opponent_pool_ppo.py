@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import copy
 from pathlib import Path
 from utils.elo import update_elo_ratings, softmax_weights
 
@@ -16,8 +15,21 @@ class OpponentPoolPPO:
         self.opponent_elos = []
         self.opponent_metadata = []
     
-    def add_opponent(self, agent, checkpoint_path, iteration, description=""):
-        frozen_agent = copy.deepcopy(agent)
+    def add_opponent(self, agent, checkpoint_path, iteration, description="", sota_config=None):
+        from agents.ppo_agent import PPOAgent
+        
+        if sota_config is None:
+            raise ValueError("sota_config must be provided to add_opponent")
+        
+        frozen_agent = PPOAgent(
+            sota_config=sota_config,
+            id=f"Opponent_{iteration}",
+            grid_size=agent.grid_size,
+            device=agent.device,
+            memory_channels=sota_config['memory_channels']
+        )
+        
+        frozen_agent.network.load_state_dict(agent.network.state_dict())
         frozen_agent.network.eval()
         for param in frozen_agent.network.parameters():
             param.requires_grad = False
