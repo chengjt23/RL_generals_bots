@@ -174,5 +174,5 @@ class SOTANetwork(nn.Module):
         x = torch.cat([obs, memory], dim=1) if self.memory_channels > 0 else obs
         features = self.backbone(x)
         policy_logits = self.policy_head(features)
-        value = self.value_head(features)
+        value = self.value_head(features.detach())
         return policy_logits, value

@@ -48,9 +48,8 @@ class MemoryAugmentation:
         opponent_mask = observation["opponent_cells"]
         self.opponent_visible_cells = np.where(visible_mask, opponent_mask, self.opponent_visible_cells)
         
-        # Update last seen timestep
-        current_timestep = observation["timestep"]
-        self.last_seen_timestep = np.where(visible_mask, current_timestep, self.last_seen_timestep)
+        # Update last seen timestep (age: 0 = just seen, N = N turns since last seen)
+        self.last_seen_timestep = np.where(visible_mask, 0, self.last_seen_timestep + 1)
         
         # Update action maps
         # Decay
