@@ -57,7 +57,7 @@ multi_gpu:
   strategy: ddp
 
 logging:
-  use_wandb: false
+  use_wandb: true
   project_name: generals-rl-ppo
   wandb_entity: null
 
