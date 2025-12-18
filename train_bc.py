@@ -15,7 +15,7 @@ from data.iterable_dataloader import create_iterable_dataloader
 from agents.network import SOTANetwork
 
 try:
-    import wandb
+    import swanlab as wandb
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
@@ -77,13 +77,14 @@ class BehaviorCloningTrainer:
             
             wandb.init(
                 project=self.config['logging'].get('wandb_project', 'generals-rl'),
+                workspace=self.config['logging'].get('wandb_entity', None),
                 name=f"{exp_name}_{timestamp}",
                 config=self.config,
                 dir=str(self.exp_dir),
                 tags=self.config['logging'].get('wandb_tags', []),
             )
-            wandb.watch(self.model, log='all', log_freq=100)
-            print(f"Wandb initialized: {wandb.run.url}")
+            # wandb.watch(self.model, log='all', log_freq=100)
+            # print(f"Wandb initialized: {wandb.run.url}")
         else:
             if not WANDB_AVAILABLE:
                 print("Wandb not available (not installed)")
@@ -114,6 +115,9 @@ class BehaviorCloningTrainer:
             min_stars=data_config['min_stars'],
             max_turns=data_config['max_turns'],
         )
+        
+        # Create persistent iterator for resuming
+        self.train_iterator = iter(self.train_loader)
         
         val_dataset = GeneralsReplayDataset(
             data_dir=data_config['data_dir'],
@@ -231,14 +235,20 @@ class BehaviorCloningTrainer:
         num_batches = 0
         
         pbar = tqdm(
-            self.train_loader,
+            range(self.steps_per_epoch),
             desc=f"Epoch {epoch}/{self.config['training']['num_epochs']} [Train]",
             unit="batch",
             leave=False,
-            total=self.steps_per_epoch
         )
         
-        for batch_idx, (obs, memory, actions, _) in enumerate(pbar):
+        for _ in pbar:
+            try:
+                obs, memory, actions, _ = next(self.train_iterator)
+            except StopIteration:
+                # Should not happen with infinite iterator, but just in case
+                self.train_iterator = iter(self.train_loader)
+                obs, memory, actions, _ = next(self.train_iterator)
+                
             obs = obs.to(self.device)
             memory = memory.to(self.device)
             actions = actions.to(self.device)
@@ -272,9 +282,6 @@ class BehaviorCloningTrainer:
             
             total_loss += loss.item()
             num_batches += 1
-            
-            if num_batches >= self.steps_per_epoch:
-                break
             
             avg_loss = total_loss / num_batches
             pbar.set_postfix({
@@ -430,7 +437,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='/root/oyx_fork/configs/config_base.yaml',
+        default='/root/shared-nvme/oyx/RL_generals_bots/configs/config_base.yaml',
         help='Path to config file'
     )
     args = parser.parse_args()

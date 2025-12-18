@@ -1,11 +1,10 @@
 import numpy as np
-from collections import deque
 
 
 class MemoryAugmentation:
-    def __init__(self, grid_shape: tuple[int, int], history_length: int = 7):
+    def __init__(self, grid_shape: tuple[int, int], decay: float = 0.95):
         self.grid_shape = grid_shape
-        self.history_length = history_length
+        self.decay = decay
         self.reset()
 
     def reset(self):
@@ -15,7 +14,16 @@ class MemoryAugmentation:
         self.last_seen_armies = np.zeros(self.grid_shape, dtype=np.float32)
         self.explored_cells = np.zeros(self.grid_shape, dtype=np.float32)
         self.opponent_visible_cells = np.zeros(self.grid_shape, dtype=np.float32)
-        self.action_history = deque(maxlen=self.history_length * 2)
+        
+        # New features
+        self.discovered_city_armies = np.zeros(self.grid_shape, dtype=np.float32)
+        self.last_seen_timestep = np.zeros(self.grid_shape, dtype=np.float32)
+        
+        # Action maps
+        # 4 directional channels: UP, DOWN, LEFT, RIGHT
+        self.action_overlays = np.zeros((4, *self.grid_shape), dtype=np.float32)
+        # 1 visit channel
+        self.action_visit = np.zeros(self.grid_shape, dtype=np.float32)
 
     def clone(self):
         new_mem = MemoryAugmentation(self.grid_shape, self.history_length)
@@ -39,17 +47,22 @@ class MemoryAugmentation:
         castles_mask = observation["cities"]
         generals_mask = observation["generals"]
         mountains_mask = observation["mountains"]
+        armies = observation["armies"]
         
-        self.discovered_castles = np.maximum(self.discovered_castles, castles_mask * visible_mask)
-        self.discovered_generals = np.maximum(self.discovered_generals, generals_mask * visible_mask)
-        self.discovered_mountains = np.maximum(self.discovered_mountains, mountains_mask)
+        # Update static/semi-static features with "last seen" logic
+        self.discovered_castles = np.where(visible_mask, castles_mask, self.discovered_castles)
+        self.discovered_generals = np.where(visible_mask, generals_mask, self.discovered_generals)
+        self.discovered_mountains = np.where(visible_mask, mountains_mask, self.discovered_mountains)
         
-        self.last_seen_armies = np.where(visible_mask > 0, observation["armies"], self.last_seen_armies)
+        self.last_seen_armies = np.where(visible_mask, armies, self.last_seen_armies)
+        
+        # Update discovered city armies
+        self.discovered_city_armies = np.where(visible_mask, castles_mask * armies, self.discovered_city_armies)
         
         self.explored_cells = np.maximum(self.explored_cells, visible_mask)
         
         opponent_mask = observation["opponent_cells"]
-        self.opponent_visible_cells = np.maximum(self.opponent_visible_cells, opponent_mask)
+        self.opponent_visible_cells = np.where(visible_mask, opponent_mask, self.opponent_visible_cells)
         
         agent_action_array = self._action_to_array(action_agent)
         opponent_action_array = self._action_to_array(action_opponent)
@@ -105,3 +118,18 @@ class MemoryAugmentation:
                 action_map[row, col] = direction + 1
         return action_map
 
+        # Final Channels: 
+        """
+        0: discovered_castles
+        1: discovered_generals
+        2: discovered_mountains
+        3: last_seen_armies
+        4: explored_cells
+        5: opponent_visible_cells
+        6: discovered_city_armies
+        7: last_seen_timestep
+        8: action_visit
+        9-12: action_overlays (UP, DOWN, LEFT, RIGHT)
+        """
+            
+        return np.stack(feature_list, axis=0)
