@@ -38,16 +38,25 @@ class SOTAAgent(Agent):
                 state = ckpt['model_state_dict']
             else:
                 state = ckpt
-            self.network.load_state_dict(state)
+            
+            # Use strict=False to allow loading checkpoints with extra keys (e.g. LSTM weights)
+            # even if the current network definition doesn't match perfectly.
+            missing, unexpected = self.network.load_state_dict(state, strict=False)
+            if len(missing) > 0:
+                print(f"Warning: Missing keys in state_dict: {missing}")
+            if len(unexpected) > 0:
+                print(f"Warning: Unexpected keys in state_dict: {unexpected}")
         
         self.network.eval()
         
         self.memory = MemoryAugmentation((grid_size, grid_size))
         self.last_action = None
+        self.hidden_state = None
     
     def reset(self):
         self.memory.reset()
         self.last_action = None
+        self.hidden_state = None
     
     def act(self, observation: Observation) -> Action:
         # Keep shapes consistent with training: training pads BEFORE calling MemoryAugmentation.update().
@@ -63,10 +72,15 @@ class SOTAAgent(Agent):
         obs_tensor = self._prepare_observation(observation)
         memory_tensor = self._prepare_memory()
         
-        with torch.no_grad():
-            policy_logits, _ = self.network(obs_tensor, memory_tensor)
+        # Add time dimension (B=1, T=1, C, H, W)
+        obs_tensor = obs_tensor.unsqueeze(1)
+        memory_tensor = memory_tensor.unsqueeze(1)
         
-        policy_logits = policy_logits.squeeze(0)
+        with torch.no_grad():
+            policy_logits, _, self.hidden_state = self.network(obs_tensor, memory_tensor, self.hidden_state)
+        
+        # Remove time dimension and batch dimension for sampling
+        policy_logits = policy_logits.squeeze(0).squeeze(0)
         
         action = self._sample_action(policy_logits, observation)
         self.last_action = action
