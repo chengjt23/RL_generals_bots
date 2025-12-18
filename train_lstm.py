@@ -176,11 +176,12 @@ class LSTMOnlyTrainer:
         # Create persistent iterator for resuming
         self.train_iterator = iter(self.train_loader)
         
+        # Use same batch size and workers for validation to ensure speed
         self.val_loader = create_iterable_dataloader(
             data_dir=data_config['data_dir'],
-            batch_size=1, # Validate one game at a time
+            batch_size=train_config['batch_size'], 
             grid_size=data_config['grid_size'],
-            num_workers=1,
+            num_workers=train_config['num_workers'],
             max_replays=val_replays,
             min_stars=data_config['min_stars'],
             max_turns=data_config['max_turns'],
@@ -433,47 +434,65 @@ class LSTMOnlyTrainer:
         num_batches = 0
         
         val_iterator = iter(self.val_loader)
-        val_hidden_state = None
-        val_steps = 1000 
+        val_hidden_states = {} # Key: worker_id, Value: (h, c)
+        
+        # Validate on 50 effective batches (approx 100k samples)
+        # This is much faster than 1000 single samples and provides better estimate
+        val_steps = 50 
+        accumulation_steps = self.config['training']['num_workers']
         
         pbar = tqdm(
             range(val_steps),
             desc="Validation",
-            unit="chunk",
+            unit="step",
             ncols=120,
             leave=False
         )
         
         for _ in pbar:
-            try:
-                # Validation loader also yields worker_id now, but we ignore it for single-stream validation
-                # Or we can use it if we want multi-stream validation
-                batch_data = next(val_iterator)
-                if len(batch_data) == 5:
-                    obs, memory, actions, reset_mask, _ = batch_data
-                else:
-                    obs, memory, actions, reset_mask = batch_data
-            except StopIteration:
-                break
+            step_loss_accum = 0.0
+            
+            # Accumulate over workers to match training distribution
+            for _ in range(accumulation_steps):
+                try:
+                    obs, memory, actions, reset_mask, worker_id = next(val_iterator)
+                except StopIteration:
+                    # If validation set exhausted, just break inner loop
+                    break
                 
-            obs = obs.to(self.device)
-            memory = memory.to(self.device)
-            actions = actions.to(self.device)
-            reset_mask = reset_mask.to(self.device)
+                curr_w_id = worker_id.item()
+                
+                obs = obs.to(self.device)
+                memory = memory.to(self.device)
+                actions = actions.to(self.device)
+                reset_mask = reset_mask.to(self.device)
+                
+                if curr_w_id not in val_hidden_states:
+                    val_hidden_states[curr_w_id] = None
+                
+                val_hidden_state = val_hidden_states[curr_w_id]
+                
+                if val_hidden_state is not None:
+                    h, c = val_hidden_state
+                    mask_expanded = reset_mask.view(-1, 1, 1, 1).expand_as(h)
+                    h = h * (~mask_expanded)
+                    c = c * (~mask_expanded)
+                    val_hidden_state = (h, c)
+                
+                policy_logits, _, new_hidden_state = self.model(obs, memory, val_hidden_state)
+                loss = self.compute_loss(obs, actions, policy_logits)
+                
+                # We don't need to scale loss for gradients, but we want the mean over the effective batch
+                # compute_loss returns mean over micro-batch.
+                # To get mean over effective batch, we sum(micro_batch_means) / accumulation_steps
+                step_loss_accum += loss.item()
+                
+                h, c = new_hidden_state
+                val_hidden_states[curr_w_id] = (h, c)
             
-            if val_hidden_state is not None:
-                h, c = val_hidden_state
-                mask_expanded = reset_mask.view(-1, 1, 1, 1).expand_as(h)
-                h = h * (~mask_expanded)
-                c = c * (~mask_expanded)
-                val_hidden_state = (h, c)
-            
-            policy_logits, _, new_hidden_state = self.model(obs, memory, val_hidden_state)
-            loss = self.compute_loss(obs, actions, policy_logits)
-            
-            val_hidden_state = new_hidden_state
-            
-            total_loss += loss.item()
+            # Average loss over the accumulation steps
+            step_loss = step_loss_accum / accumulation_steps
+            total_loss += step_loss
             num_batches += 1
             
             avg_loss = total_loss / num_batches
