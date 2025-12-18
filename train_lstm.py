@@ -303,6 +303,14 @@ class LSTMOnlyTrainer:
         # Key: worker_id (int), Value: (h, c) tuple
         if not hasattr(self, 'hidden_states'):
             self.hidden_states = {}
+            
+        # Gradient Accumulation Setup
+        # We want an effective batch size of config['batch_size'] (e.g., 2048)
+        # But each worker yields batch_size // num_workers (e.g., 32)
+        # So we need to accumulate gradients from 'num_workers' batches.
+        accumulation_steps = self.config['training']['num_workers']
+        effective_batch_size = self.config['training']['batch_size']
+        print(f"Gradient Accumulation: {accumulation_steps} steps (Effective Batch Size: {effective_batch_size})")
         
         pbar = tqdm(
             range(self.steps_per_epoch),
@@ -310,6 +318,8 @@ class LSTMOnlyTrainer:
             unit="batch",
             leave=False,
         )
+        
+        self.optimizer.zero_grad()
         
         for i, _ in enumerate(pbar):
             try:
@@ -330,8 +340,6 @@ class LSTMOnlyTrainer:
             memory = memory.to(self.device)
             actions = actions.to(self.device)
             reset_mask = reset_mask.to(self.device)
-            
-            self.optimizer.zero_grad()
             
             # Retrieve hidden state for this worker
             if curr_w_id not in self.hidden_states:
@@ -354,50 +362,62 @@ class LSTMOnlyTrainer:
                 with autocast():
                     policy_logits, _, new_hidden_state = self.model(obs, memory, current_hidden_state)
                     loss = self.compute_loss(obs, actions, policy_logits)
+                    loss = loss / accumulation_steps
                 
                 self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config['training']['gradient_clip']
-                )
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+                
+                if (i + 1) % accumulation_steps == 0:
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config['training']['gradient_clip']
+                    )
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    self.optimizer.zero_grad()
+                    self.scheduler.step()
             else:
                 policy_logits, _, new_hidden_state = self.model(obs, memory, current_hidden_state)
                 loss = self.compute_loss(obs, actions, policy_logits)
+                loss = loss / accumulation_steps
+                
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config['training']['gradient_clip']
-                )
-                self.optimizer.step()
+                
+                if (i + 1) % accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config['training']['gradient_clip']
+                    )
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+                    self.scheduler.step()
             
             h, c = new_hidden_state
             # Detach and store for next iteration of THIS worker
             self.hidden_states[curr_w_id] = (h.detach(), c.detach())
             
-            self.scheduler.step()
-            
-            total_loss += loss.item()
+            # Logging (approximate, using current batch loss * accumulation_steps)
+            current_loss = loss.item() * accumulation_steps
+            total_loss += current_loss
             num_batches += 1
             
             avg_loss = total_loss / num_batches
             pbar.set_postfix({
-                'loss': f"{loss.item():.4f}",
+                'loss': f"{current_loss:.4f}",
                 'avg_loss': f"{avg_loss:.4f}",
                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"
             })
             
-            if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False):
+            if WANDB_AVAILABLE and self.config['logging'].get('use_wandb', False) and (i + 1) % accumulation_steps == 0:
                 wandb.log({
-                    'train/loss': loss.item(),
+                    'train/loss': current_loss,
                     'train/avg_loss': avg_loss,
                     'train/learning_rate': self.scheduler.get_last_lr()[0],
                     'train/step': self.global_step,
                 }, step=self.global_step)
             
-            self.global_step += 1
+            if (i + 1) % accumulation_steps == 0:
+                self.global_step += 1
         
         return total_loss / num_batches
     
