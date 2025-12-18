@@ -55,9 +55,19 @@ class SOTAAgent(Agent):
 
         # Update memory with the *current* observation and the *previous* actions.
         if self.last_action is not None:
+            action_array = np.array([1, 0, 0, 0, 0], dtype=np.int8)
+            try:
+                if self.last_action.row is not None:
+                    action_array[0] = 0
+                    action_array[1] = self.last_action.row
+                    action_array[2] = self.last_action.col
+                    action_array[3] = self.last_action.direction
+                    action_array[4] = int(self.last_action.split)
+            except (AttributeError, TypeError):
+                pass
             self.memory.update(
                 self._obs_to_dict(observation),
-                np.asarray(self.last_action, dtype=np.int8),
+                action_array,
             )
         
         obs_tensor = self._prepare_observation(observation)

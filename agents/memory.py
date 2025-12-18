@@ -25,23 +25,7 @@ class MemoryAugmentation:
         # 1 visit channel
         self.action_visit = np.zeros(self.grid_shape, dtype=np.float32)
 
-    def clone(self):
-        new_mem = MemoryAugmentation(self.grid_shape, self.history_length)
-        new_mem.discovered_castles = self.discovered_castles.copy()
-        new_mem.discovered_generals = self.discovered_generals.copy()
-        new_mem.discovered_mountains = self.discovered_mountains.copy()
-        new_mem.last_seen_armies = self.last_seen_armies.copy()
-        new_mem.explored_cells = self.explored_cells.copy()
-        new_mem.opponent_visible_cells = self.opponent_visible_cells.copy()
-        new_mem.action_history = deque(self.action_history, maxlen=self.history_length * 2)
-        return new_mem
-
-    def update(self, observation: dict, action_agent, action_opponent):
-        obs_shape = observation["fog_cells"].shape
-        if obs_shape != self.grid_shape:
-            self.grid_shape = obs_shape
-            self.reset()
-        
+    def update(self, observation: dict, action_agent: np.ndarray):
         visible_mask = 1 - observation["fog_cells"] - observation["structures_in_fog"]
         
         castles_mask = observation["cities"]
@@ -64,59 +48,48 @@ class MemoryAugmentation:
         opponent_mask = observation["opponent_cells"]
         self.opponent_visible_cells = np.where(visible_mask, opponent_mask, self.opponent_visible_cells)
         
-        agent_action_array = self._action_to_array(action_agent)
-        opponent_action_array = self._action_to_array(action_opponent)
-        self.action_history.append((agent_action_array, opponent_action_array))
-
-    def get_memory_features(self, out: np.ndarray = None) -> np.ndarray:
-        n_channels = 6 + self.history_length * 2
-        if out is None:
-            out = np.zeros((n_channels, *self.grid_shape), dtype=np.float32)
+        # Update last seen timestep
+        current_timestep = observation["timestep"]
+        self.last_seen_timestep = np.where(visible_mask, current_timestep, self.last_seen_timestep)
         
-        out[0] = self.discovered_castles
-        out[1] = self.discovered_generals
-        out[2] = self.discovered_mountains
-        out[3] = self.last_seen_armies
-        out[4] = self.explored_cells
-        out[5] = self.opponent_visible_cells
+        # Update action maps
+        # Decay
+        self.action_overlays *= self.decay
+        self.action_visit *= self.decay
         
-        base_idx = 6
-        for i in range(self.history_length):
-            if i < len(self.action_history):
-                agent_action, opponent_action = self.action_history[-(i+1)]
-                self._action_to_map_inplace(agent_action, out[base_idx + i * 2])
-                self._action_to_map_inplace(opponent_action, out[base_idx + i * 2 + 1])
-            else:
-                out[base_idx + i * 2].fill(0)
-                out[base_idx + i * 2 + 1].fill(0)
-        
-        return out
-    
-    def _action_to_map_inplace(self, action: np.ndarray, out: np.ndarray):
-        out.fill(0)
-        if action[0] == 0:
-            row, col = int(action[1]), int(action[2])
+        # Add new action
+        if action_agent[0] == 0: # Move action
+            row, col = int(action_agent[1]), int(action_agent[2])
+            direction = int(action_agent[3])
+            
             if 0 <= row < self.grid_shape[0] and 0 <= col < self.grid_shape[1]:
-                out[row, col] = int(action[3]) + 1
+                if 0 <= direction < 4:
+                    self.action_overlays[direction, row, col] += 1.0
+                self.action_visit[row, col] += 1.0
 
-    def _action_to_array(self, action):
-        if isinstance(action, np.ndarray):
-            return action.copy()
-        try:
-            if action.row is not None:
-                return np.array([0, action.row, action.col, action.direction, int(action.split)], dtype=np.int8)
-        except (AttributeError, TypeError):
-            pass
-        return np.array([1, 0, 0, 0, 0], dtype=np.int8)
-    
-    def _action_to_map(self, action: np.ndarray) -> np.ndarray:
-        action_map = np.zeros(self.grid_shape, dtype=np.float32)
-        if action[0] == 0:
-            row, col = int(action[1]), int(action[2])
-            if 0 <= row < self.grid_shape[0] and 0 <= col < self.grid_shape[1]:
-                direction = int(action[3])
-                action_map[row, col] = direction + 1
-        return action_map
+    def get_memory_features(self) -> np.ndarray:
+        memory_channels = [
+            self.discovered_castles,
+            self.discovered_generals,
+            self.discovered_mountains,
+            self.last_seen_armies,
+            self.explored_cells,
+            self.opponent_visible_cells,
+            self.discovered_city_armies,
+            self.last_seen_timestep,
+            self.action_visit,
+        ]
+        
+        # Stack everything: 8 static + 1 visit + 4 directional = 13 channels
+        # Note: action_overlays is (4, H, W), others are (H, W)
+        
+        feature_list = []
+        for feat in memory_channels:
+            feature_list.append(feat)
+            
+        # Add directional overlays
+        for i in range(4):
+            feature_list.append(self.action_overlays[i])
 
         # Final Channels: 
         """
@@ -133,3 +106,17 @@ class MemoryAugmentation:
         """
             
         return np.stack(feature_list, axis=0)
+    
+    def clone(self):
+        cloned = MemoryAugmentation(self.grid_shape, self.decay)
+        cloned.discovered_castles = self.discovered_castles.copy()
+        cloned.discovered_generals = self.discovered_generals.copy()
+        cloned.discovered_mountains = self.discovered_mountains.copy()
+        cloned.last_seen_armies = self.last_seen_armies.copy()
+        cloned.explored_cells = self.explored_cells.copy()
+        cloned.opponent_visible_cells = self.opponent_visible_cells.copy()
+        cloned.discovered_city_armies = self.discovered_city_armies.copy()
+        cloned.last_seen_timestep = self.last_seen_timestep.copy()
+        cloned.action_overlays = self.action_overlays.copy()
+        cloned.action_visit = self.action_visit.copy()
+        return cloned

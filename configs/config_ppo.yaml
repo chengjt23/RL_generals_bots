@@ -5,7 +5,7 @@ experiment:
 
 model:
   obs_channels: 15
-  memory_channels: 20
+  memory_channels: 13
   base_channels: 64
   grid_size: 24
 
