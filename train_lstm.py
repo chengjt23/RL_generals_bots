@@ -45,7 +45,7 @@ class LSTMOnlyTrainer:
     
     def setup_dirs(self):
         exp_name = self.config['logging']['experiment_name'] + "_lstm_only"
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.now().strftime('%d_%H%M')
         self.exp_dir = Path(self.config['logging']['save_dir']) / f"{exp_name}_{timestamp}"
         self.exp_dir.mkdir(parents=True, exist_ok=True)
         
