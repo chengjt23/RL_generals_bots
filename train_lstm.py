@@ -651,8 +651,8 @@ class LSTMOnlyTrainer:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train LSTM module only")
-    parser.add_argument("--config", type=str, required=True, help="Path to config file")
-    parser.add_argument("--checkpoint", type=str, required=True, help="Path to pretrained UNet checkpoint")
+    parser.add_argument("--config", type=str, default="/root/shared-nvme/oyx/RL_generals_bots/configs/config_base_lstm.yaml", help="Path to config file")
+    parser.add_argument("--checkpoint", type=str, default="/root/shared-nvme/oyx/RL_generals_bots/experiments/bc_new_mem_all_replays_20251218_014906/checkpoints/epoch_37_loss_1.7065.pt", help="Path to pretrained UNet checkpoint")
     args = parser.parse_args()
     
     trainer = LSTMOnlyTrainer(args.config, args.checkpoint)
