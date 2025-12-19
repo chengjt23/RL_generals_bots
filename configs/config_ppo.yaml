@@ -1,7 +1,7 @@
 experiment:
-  name: ppo_selfplay
+  name: ppo_selfplay_with_log_bc
   save_dir: experiments
-  bc_pretrain_path: /root/shared-nvme/cjt/experiments/epoch_15_loss_1.6333.pt
+  bc_pretrain_path: /root/shared-nvme/cjt/experiments/bc_new_mem_all_replays_20251218_233422/checkpoints/epoch_14_loss_1.8876.pt
 
 model:
   obs_channels: 15
@@ -29,8 +29,8 @@ training:
   
   warmup_iterations: 0
   eval_frequency: 25
-  save_frequency: 50
-  log_frequency: 5
+  save_frequency: 1 # 50
+  log_frequency: 1 # 25
   
   max_episode_steps: 1000
   
@@ -46,18 +46,18 @@ opponent_pool:
   warmup_iterations: 0
 
 reward:
-  land_weight: 0.3
+  land_weight: 0.4
   army_weight: 0.3
-  castle_weight: 0.4
-  max_ratio: 100.0
-  gamma: 0.99
+  castle_weight: 0.3
+  max_ratio: 5.0 # 100.0
+  gamma: 1.00
 
 multi_gpu:
   enabled: false
   strategy: ddp
 
 logging:
-  use_wandb: true
+  use_wandb: false
   project_name: generals-rl-ppo
   wandb_entity: null
 

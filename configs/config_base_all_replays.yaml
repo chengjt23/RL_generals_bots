@@ -10,10 +10,9 @@ training:
   # Automatic Weighted Loss learning rate (for value head training)
   awl_lr: 0.01            # AWL learning rate (推荐0.01)
   
-  save_top_k: 5
+  save_top_k: 5   []
   eval_every: 1000
   log_every: 100
-  
   device: cuda
   num_workers: 4
   mixed_precision: true

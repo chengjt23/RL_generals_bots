@@ -85,7 +85,7 @@ def compete(
     agent_config = {
         'grid_size': 24,
         'obs_channels': 15,
-        'memory_channels': 20,
+        'memory_channels': 13,
         'base_channels': 64
     }
     
@@ -95,8 +95,7 @@ def compete(
         id=agent1_name,
         grid_size=24,
         device=device,
-        model_path=ppo_checkpoint,
-        memory_channels=20
+        model_path=ppo_checkpoint
     )
     agent1.network.eval()
     print(f"  {agent1_name} Agent loaded from: {ppo_checkpoint}")
@@ -108,8 +107,7 @@ def compete(
             id=agent2_name,
             grid_size=24,
             device=device,
-            model_path=bc_model_path,
-            memory_channels=20
+            model_path=bc_model_path
         )
         print(f"  {agent2_name} Agent loaded from: {bc_model_path}")
     else:  # ppo_vs_ppo
@@ -118,8 +116,7 @@ def compete(
             id=agent2_name,
             grid_size=24,
             device=device,
-            model_path=ppo_checkpoint2,
-            memory_channels=20
+            model_path=ppo_checkpoint2
         )
         agent2.network.eval()
         print(f"  {agent2_name} Agent loaded from: {ppo_checkpoint2}")

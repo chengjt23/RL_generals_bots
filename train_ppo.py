@@ -287,7 +287,6 @@ class PPOTrainer:
                         mem.update(
                             opponent._obs_to_dict(obs),
                             np.asarray(opponent.last_action, dtype=np.int8),
-                            np.asarray(opponent.opponent_last_action, dtype=np.int8),
                         )
                     
                     opponent.last_action = opp_action
@@ -300,7 +299,31 @@ class PPOTrainer:
             next_obs_dicts = list(next_obs_dicts)
 
             next_agent_obs = [next_obs_dicts[i]["Agent"] for i in range(n_envs)]
-            rewards = self.reward_fn.compute_batch(prior_observations, next_agent_obs)
+            rewards, reward_details = self.reward_fn.compute_batch(prior_observations, next_agent_obs, prior_actions=agent_actions, return_details=True)
+            
+            # if step == 0 or (step % 1 == 0 and step > 0):
+            #     print(f"\n{'='*80}")
+            #     print(f"[REWARD DETAILS] Step {step}, Sample from env 0:")
+            #     print(f"{'='*80}")
+            #     if reward_details and len(reward_details) > 0:
+            #         det = reward_details[0]
+            #         print(f"  Original Reward (win/loss): {det['original_reward']:.4f}")
+            #         print(f"    - Agent Generals: {det['agent_generals']} (prior: {det['prior_generals']})")
+            #         print(f"  Potential Current: {det['potential_current']:.6f}")
+            #         print(f"    - Agent Land: {det['agent_land']}, Enemy Land: {det['enemy_land']}")
+            #         print(f"    - Agent Army: {det['agent_army']}, Enemy Army: {det['enemy_army']}")
+            #         print(f"    - Agent Castles: {det['agent_castles']}, Enemy Castles: {det['enemy_castles']}")
+            #         print(f"  Potential Prior: {det['potential_prior']:.6f}")
+            #         print(f"    - Prior Agent Land: {det['prior_agent_land']}, Prior Enemy Land: {det['prior_enemy_land']}")
+            #         print(f"    - Prior Agent Army: {det['prior_agent_army']}, Prior Enemy Army: {det['prior_enemy_army']}")
+            #         print(f"    - Prior Agent Castles: {det['prior_agent_castles']}, Prior Enemy Castles: {det['prior_enemy_castles']}")
+            #         print(f"  Potential Diff (γ*φ_current - φ_prior): {det['potential_diff']:.6f}")
+            #         print(f"    - γ = {self.reward_fn.gamma:.4f}")
+            #         print(f"  Pass Penalty: {det['pass_penalty']:.4f}")
+            #         print(f"  {'-'*80}")
+            #         print(f"  FINAL REWARD: {det['final_reward']:.6f}")
+            #         print(f"    = {det['original_reward']:.4f} + {det['potential_diff']:.6f} + {det['pass_penalty']:.4f}")
+            #         print(f"{'='*80}\n")
 
             reset_envs = []
             

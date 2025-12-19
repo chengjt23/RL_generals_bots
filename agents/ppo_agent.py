@@ -41,7 +41,7 @@ class PPOAgent(Agent):
                 state = ckpt
             self.network.load_state_dict(state)
         
-        self.memory = MemoryAugmentation((grid_size, grid_size), history_length=7)
+        self.memory = MemoryAugmentation((grid_size, grid_size), decay=0.95)
         self.last_action = None
         self.opponent_last_action = Action(to_pass=True)
         self._prev_obs_snapshot: dict[str, np.ndarray] | None = None
@@ -63,7 +63,6 @@ class PPOAgent(Agent):
             self.memory.update(
                 self._obs_to_dict(observation),
                 np.asarray(self.last_action, dtype=np.int8),
-                np.asarray(self.opponent_last_action, dtype=np.int8),
             )
         
         obs_tensor = self._prepare_observation(observation)
@@ -94,7 +93,6 @@ class PPOAgent(Agent):
             self.memory.update(
                 self._obs_to_dict(observation),
                 np.asarray(self.last_action, dtype=np.int8),
-                np.asarray(self.opponent_last_action, dtype=np.int8),
             )
         
         obs_tensor = self._prepare_observation(observation)
@@ -113,85 +111,84 @@ class PPOAgent(Agent):
         
         return action, log_prob, value.item()
     
-    def act_with_value_batch(self, observations, memories, prev_obs_snapshots=None, last_actions=None, opponent_last_actions=None):
-        """
-        Batch version of act_with_value that processes multiple observations.
+    # def act_with_value_batch(self, observations, memories, prev_obs_snapshots=None, last_actions=None, opponent_last_actions=None):
+    #     """
+    #     Batch version of act_with_value that processes multiple observations.
         
-        Args:
-            observations: List of Observation objects
-            memories: List of MemoryAugmentation objects (will be updated in-place)
-            prev_obs_snapshots: Optional list of previous observation snapshots for opponent action inference
-            last_actions: Optional list of last actions for memory update
-            opponent_last_actions: Optional list of opponent's last actions for memory update
+    #     Args:
+    #         observations: List of Observation objects
+    #         memories: List of MemoryAugmentation objects (will be updated in-place)
+    #         prev_obs_snapshots: Optional list of previous observation snapshots for opponent action inference
+    #         last_actions: Optional list of last actions for memory update
+    #         opponent_last_actions: Optional list of opponent's last actions for memory update
         
-        Returns:
-            actions: List of Action objects
-            log_probs: List of log probabilities (float)
-            values: List of state values (float)
-        """
-        batch_size = len(observations)
+    #     Returns:
+    #         actions: List of Action objects
+    #         log_probs: List of log probabilities (float)
+    #         values: List of state values (float)
+    #     """
+    #     batch_size = len(observations)
         
-        # Update memories before forward pass
-        # Note: opponent_last_actions should already be inferred in collect_trajectories
-        if last_actions is not None:
-            for i in range(batch_size):
-                memory = memories[i]
-                last_action = last_actions[i]
-                obs = observations[i]
+    #     # Update memories before forward pass
+    #     # Note: opponent_last_actions should already be inferred in collect_trajectories
+    #     if last_actions is not None:
+    #         for i in range(batch_size):
+    #             memory = memories[i]
+    #             last_action = last_actions[i]
+    #             obs = observations[i]
                 
-                # Pad observation before updating memory to ensure consistent grid_shape
-                obs.pad_observation(pad_to=self.grid_size)
+    #             # Pad observation before updating memory to ensure consistent grid_shape
+    #             obs.pad_observation(pad_to=self.grid_size)
                 
-                # Use provided opponent_last_actions if available, otherwise infer
-                if opponent_last_actions is not None and i < len(opponent_last_actions):
-                    opponent_action = opponent_last_actions[i]
-                elif prev_obs_snapshots is not None and prev_obs_snapshots[i] is not None:
-                    # Fallback: infer opponent action if not provided
-                    opponent_action = self._infer_opponent_action(prev_obs_snapshots[i], obs)
-                else:
-                    opponent_action = Action(to_pass=True)
+    #             # Use provided opponent_last_actions if available, otherwise infer
+    #             if opponent_last_actions is not None and i < len(opponent_last_actions):
+    #                 opponent_action = opponent_last_actions[i]
+    #             elif prev_obs_snapshots is not None and prev_obs_snapshots[i] is not None:
+    #                 # Fallback: infer opponent action if not provided
+    #                 opponent_action = self._infer_opponent_action(prev_obs_snapshots[i], obs)
+    #             else:
+    #                 opponent_action = Action(to_pass=True)
                 
-                # Update memory with current observation and previous actions
-                if last_action is not None:
-                    memory.update(
-                        self._obs_to_dict(obs),
-                        np.asarray(last_action, dtype=np.int8),
-                        np.asarray(opponent_action, dtype=np.int8),
-                    )
+    #             # Update memory with current observation and previous actions
+    #             if last_action is not None:
+    #                 memory.update(
+    #                     self._obs_to_dict(obs),
+    #                     np.asarray(last_action, dtype=np.int8),
+    #                 )
         
-        obs_tensors = []
-        memory_tensors = []
+    #     obs_tensors = []
+    #     memory_tensors = []
         
-        for i in range(batch_size):
-            obs = observations[i]
-            obs.pad_observation(pad_to=self.grid_size)
-            obs_tensor = torch.from_numpy(obs.as_tensor()).float()
-            obs_tensors.append(obs_tensor)
+    #     for i in range(batch_size):
+    #         obs = observations[i]
+    #         obs.pad_observation(pad_to=self.grid_size)
+    #         obs_tensor = torch.from_numpy(obs.as_tensor()).float()
+    #         obs_tensors.append(obs_tensor)
             
-            memory_tensor = torch.from_numpy(memories[i].get_memory_features()).float()
-            memory_tensors.append(memory_tensor)
+    #         memory_tensor = torch.from_numpy(memories[i].get_memory_features()).float()
+    #         memory_tensors.append(memory_tensor)
         
-        obs_batch = torch.stack(obs_tensors).to(self.device)
-        memory_batch = torch.stack(memory_tensors).to(self.device)
+    #     obs_batch = torch.stack(obs_tensors).to(self.device)
+    #     memory_batch = torch.stack(memory_tensors).to(self.device)
         
-        with torch.no_grad():
-            policy_logits_batch, values_batch = self.network(obs_batch, memory_batch)
+    #     with torch.no_grad():
+    #         policy_logits_batch, values_batch = self.network(obs_batch, memory_batch)
         
-        actions = []
-        log_probs = []
-        values = []
+    #     actions = []
+    #     log_probs = []
+    #     values = []
         
-        for i in range(batch_size):
-            policy_logits = policy_logits_batch[i]
-            value = values_batch[i]
+    #     for i in range(batch_size):
+    #         policy_logits = policy_logits_batch[i]
+    #         value = values_batch[i]
             
-            action, log_prob = self._sample_action_with_log_prob(policy_logits, observations[i])
+    #         action, log_prob = self._sample_action_with_log_prob(policy_logits, observations[i])
             
-            actions.append(action)
-            log_probs.append(log_prob)
-            values.append(value.item())
+    #         actions.append(action)
+    #         log_probs.append(log_prob)
+    #         values.append(value.item())
         
-        return actions, log_probs, values
+    #     return actions, log_probs, values
     
     def act_with_value_batch_fast(self, observations, memories, obs_buffer, mem_buffer, device,
                                    prev_obs_snapshots=None, last_actions=None, opponent_last_actions=None):
@@ -215,7 +212,6 @@ class PPOAgent(Agent):
                     memory.update(
                         self._obs_to_dict(obs),
                         np.asarray(last_action, dtype=np.int8),
-                        np.asarray(opponent_action, dtype=np.int8),
                     )
         
         obs_np_list = []
@@ -460,13 +456,13 @@ class PPOAgent(Agent):
         
         row, col, direction, split = valid_actions[choice - 1]
         
-        is_owned = observation.owned_cells[row, col]
-        army_count = observation.armies[row, col]
+        # is_owned = observation.owned_cells[row, col]
+        # army_count = observation.armies[row, col]
         
-        print(f"[CRITICAL DEBUG] Agent chose Move at ({row}, {col}). Owned? {is_owned}, Armies: {army_count}")
+        # print(f"[CRITICAL DEBUG] Agent chose Move at ({row}, {col}). Owned? {is_owned}, Armies: {army_count}")
         
-        if not is_owned or army_count <= 1:
-            print("!!! ERROR: Mask failed! Agent chose an invalid cell. This is why it looks like")
+        # if not is_owned or army_count <= 1:
+        #     print("!!! ERROR: Mask failed! Agent chose an invalid cell. This is why it looks like")
         
         return Action(to_pass=False, row=row, col=col, direction=direction, to_split=bool(split))
 
