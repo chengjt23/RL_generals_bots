@@ -87,7 +87,7 @@ class PotentialBasedRewardFn(RewardFn):
                 act = prior_actions[i]
                 is_pass = act.is_pass()
                 if is_pass:
-                    pass_penalty = -0.02
+                    pass_penalty = -0.05
                     r += pass_penalty
             
             rewards[i] = r

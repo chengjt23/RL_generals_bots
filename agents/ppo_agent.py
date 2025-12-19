@@ -46,12 +46,14 @@ class PPOAgent(Agent):
         self.opponent_last_action = Action(to_pass=True)
         self._prev_obs_snapshot: dict[str, np.ndarray] | None = None
         self._debug_print_count = 0
+        self._current_scale = 1.0
     
     def reset(self):
         self.memory.reset()
         self.last_action = None
         self.opponent_last_action = Action(to_pass=True)
         self._prev_obs_snapshot = None
+        self._current_scale = 1.0
     
     def act(self, observation: Observation, deterministic: bool = False) -> Action:
         observation.pad_observation(pad_to=self.grid_size)
@@ -322,7 +324,25 @@ class PPOAgent(Agent):
         obs.pad_observation(pad_to=self.grid_size)
         tensor = obs.as_tensor().astype(np.float32)
         
-        tensor = np.log1p(tensor)
+        # Dynamic Scaling: Keep max army value <= 200 to match pre-training distribution
+        # This prevents numerical explosion while preserving relative magnitudes.
+        max_army = np.max(tensor[0])
+        target_max = 200.0
+        if max_army > target_max:
+            self._current_scale = target_max / max_army
+        else:
+            self._current_scale = 1.0
+            
+        tensor[0] *= self._current_scale
+        
+        # Also scale global army counts (Channels 10 & 12) to maintain consistency with local armies
+        # Channel 9: owned_land_count (No scale, max ~576 is fine)
+        # Channel 10: owned_army_count (Scale!)
+        # Channel 11: opponent_land_count (No scale)
+        # Channel 12: opponent_army_count (Scale!)
+        if tensor.shape[0] > 12:
+            tensor[10] *= self._current_scale
+            tensor[12] *= self._current_scale
         
         obs_tensor = torch.from_numpy(tensor).float()
         obs_tensor = obs_tensor.unsqueeze(0).to(self.device)
@@ -343,24 +363,26 @@ class PPOAgent(Agent):
         new_opp = visible & cur_opp & (~prev_opp)
         positions = np.argwhere(new_opp)
         
-        if positions.shape[0] == 0:
+        if positions.shape[0] != 1:
             return Action(to_pass=True)
-        
+            
+        dest_r, dest_c = positions[0]
         gs = self.grid_size
         
-        for pos in positions:
-            dest_r, dest_c = int(pos[0]), int(pos[1])
-            for direction, (dr, dc) in enumerate([(-1, 0), (1, 0), (0, -1), (0, 1)]):
-                src_r, src_c = dest_r - dr, dest_c - dc
-                if 0 <= src_r < gs and 0 <= src_c < gs and prev_opp[src_r, src_c]:
-                    return Action(to_pass=False, row=src_r, col=src_c, direction=direction, to_split=False)
+        for direction, (dr, dc) in enumerate([(-1, 0), (1, 0), (0, -1), (0, 1)]):
+            src_r, src_c = dest_r - dr, dest_c - dc
+            if 0 <= src_r < gs and 0 <= src_c < gs and prev_opp[src_r, src_c]:
+                return Action(to_pass=False, row=src_r, col=src_c, direction=direction, to_split=False)
         
         return Action(to_pass=True)
     
     def _prepare_memory(self) -> torch.Tensor:
         memory_features = self.memory.get_memory_features().astype(np.float32)
         
-        memory_features = np.log1p(memory_features)
+        # Apply the same dynamic scale to memory features
+        if hasattr(self, '_current_scale') and self._current_scale != 1.0:
+            memory_features[3] *= self._current_scale # last_seen_armies
+            memory_features[6] *= self._current_scale # discovered_city_armies
         
         memory_tensor = torch.from_numpy(memory_features).float()
         memory_tensor = memory_tensor.unsqueeze(0).to(self.device)
@@ -369,7 +391,10 @@ class PPOAgent(Agent):
     def _prepare_memory_from_memory(self, memory) -> torch.Tensor:
         memory_features = memory.get_memory_features().astype(np.float32)
         
-        memory_features = np.log1p(memory_features)
+        # Apply the same dynamic scale to memory features
+        if hasattr(self, '_current_scale') and self._current_scale != 1.0:
+            memory_features[3] *= self._current_scale # last_seen_armies
+            memory_features[6] *= self._current_scale # discovered_city_armies
         
         memory_tensor = torch.from_numpy(memory_features).float()
         memory_tensor = memory_tensor.unsqueeze(0).to(self.device)
@@ -445,9 +470,9 @@ class PPOAgent(Agent):
         all_logits = np.array([pass_logit] + masked_logits)
         probs = torch.softmax(torch.from_numpy(all_logits), dim=0).numpy()
         
-        top_probs, top_indices = torch.topk(torch.from_numpy(probs), k=3)
-        print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
-        print(f"Top 5 Actions Indices: {top_indices.tolist()}")
+        # top_probs, top_indices = torch.topk(torch.from_numpy(probs), k=3)
+        # print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
+        # print(f"Top 5 Actions Indices: {top_indices.tolist()}")
         
         choice = np.argmax(all_logits)
         
