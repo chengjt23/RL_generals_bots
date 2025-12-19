@@ -329,7 +329,7 @@ class BehaviorCloningTrainer:
                 
                 # Compute dimensions once
                 grid_size = self.config['model']['grid_size']
-                hidden_dim = self.config['model']['base_channels'] * 4
+                hidden_dim = self.config['model']['base_channels'] * 8
                 bottleneck_size = grid_size // 8
                 
                 batch_sizes = []
