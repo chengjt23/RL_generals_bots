@@ -86,7 +86,7 @@ class ConvBlock(nn.Module):
 
 class UNetBackbone(nn.Module):
     """U-Net backbone with residual blocks and skip connections"""
-    def __init__(self, in_channels: int, base_channels: int = 64, dropout: float = 0.0):
+    def __init__(self, in_channels: int, base_channels: int = 32, dropout: float = 0.0):
         super().__init__()
         self.dropout = nn.Dropout2d(dropout) if dropout > 0 else nn.Identity()
         
@@ -219,13 +219,13 @@ class UNetBackbone(nn.Module):
 
 class PolicyHead(nn.Module):
     """Policy head outputting H×W×9 action distribution"""
-    def __init__(self, in_channels:64),
+    def __init__(self, in_channels: int, grid_size: int = 24):
+        super().__init__()
+        self.conv = nn.Sequential(
+            ConvBlock(in_channels, 64),
             ResidualBlock(64),
             ConvBlock(64, 32),
-            nn.Conv2d(32_channels, 32),
-            ResidualBlock(32),
-            ConvBlock(32, 16),
-            nn.Conv2d(16, 9, 1)  # 9 actions: pass + 4 directions × 2 (all/half)
+            nn.Conv2d(32, 9, 1)  # 9 actions: pass + 4 directions × 2 (all/half)
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -291,7 +291,7 @@ class SOTANetwork(nn.Module):
         features_reshaped = features.view(B * T, C, H, W)
         
         policy_logits = self.policy_head(features_reshaped)
-        value = self.value_head(features_reshaped)
+        value = self.value_head(features_reshaped.detach())
         
         # Reshape outputs back to (B, T, ...)
         policy_logits = policy_logits.view(B, T, -1, H, W)

@@ -122,12 +122,15 @@ Key	Shape	Description
     def _prepare_observation(self, obs: Observation) -> torch.Tensor:
         # `act()` already pads; keep this idempotent for safety.
         obs.pad_observation(pad_to=self.grid_size)
-        obs_tensor = torch.from_numpy(obs.as_tensor()).float()
+        tensor = obs.as_tensor().astype(np.float32)
+        tensor = np.log1p(tensor)
+        obs_tensor = torch.from_numpy(tensor).float()
         obs_tensor = obs_tensor.unsqueeze(0).to(self.device)
         return obs_tensor
     
     def _prepare_memory(self) -> torch.Tensor:
         memory_features = self.memory.get_memory_features()
+        memory_features = np.log1p(memory_features)
         memory_tensor = torch.from_numpy(memory_features).float()
         memory_tensor = memory_tensor.unsqueeze(0).to(self.device)
         return memory_tensor
