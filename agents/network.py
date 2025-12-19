@@ -122,17 +122,17 @@ class UNetBackbone(nn.Module):
         
         # ConvLSTM at bottleneck
         # Input channels: base_channels * 8 (from bottleneck)
-        # Hidden channels: base_channels * 8 (same as input)
+        # Hidden channels: base_channels * 4 (reduced for efficiency)
         self.conv_lstm = ConvLSTMCell(
             input_dim=base_channels * 8,
-            hidden_dim=base_channels * 8,
+            hidden_dim=base_channels * 4,
             kernel_size=(3, 3),
             bias=True
         )
         
         # Decoder with residual blocks
-        # Input channels doubled to accommodate skip connection from bottleneck
-        self.upconv3 = nn.ConvTranspose2d(base_channels * 16, base_channels * 4, 2, stride=2)
+        # Input channels: hidden_dim (base_channels * 4) + bottleneck (base_channels * 8)
+        self.upconv3 = nn.ConvTranspose2d(base_channels * 12, base_channels * 4, 2, stride=2)
         self.dec3 = nn.Sequential(
             ConvBlock(base_channels * 8, base_channels * 4),
             ResidualBlock(base_channels * 4),
@@ -189,27 +189,24 @@ class UNetBackbone(nn.Module):
         new_hidden_state = (h, c)
         
         # Reshape for Decoder: (B*T, C, H, W)
-        lstm_out_reshaped = lstm_out.view(B * T, C_b, H_b, W_b)
+        lstm_out_reshaped = lstm_out.view(B * T, -1, H_b, W_b)
         
         # Concatenate LSTM output with original bottleneck features (skip connection)
         decoder_input = torch.cat([lstm_out_reshaped, bottleneck], dim=1)
+        decoder_input = self.dropout(decoder_input)
         
         # Decoder with skip connections
         dec3 = self.upconv3(decoder_input)
         dec3 = torch.cat([dec3, enc3], dim=1)
         dec3 = self.dec3(dec3)
         
-        dec3 = self.dropout(dec3)
-        
         dec2 = self.upconv2(dec3)
         dec2 = torch.cat([dec2, enc2], dim=1)
         dec2 = self.dec2(dec2)
-        dec2 = self.dropout(dec2)
         
         dec1 = self.upconv1(dec2)
         dec1 = torch.cat([dec1, enc1], dim=1)
         dec1 = self.dec1(dec1)
-        dec1 = self.dropout(dec1)
         # Reshape back to (B, T, C, H, W)
         # Output shape: (B, T, base_channels, H, W)
         final_out = dec1.view(B, T, -1, H, W)
@@ -222,10 +219,10 @@ class PolicyHead(nn.Module):
     def __init__(self, in_channels: int, grid_size: int = 24):
         super().__init__()
         self.conv = nn.Sequential(
-            ConvBlock(in_channels, 64),
-            ResidualBlock(64),
-            ConvBlock(64, 32),
-            nn.Conv2d(32, 9, 1)  # 9 actions: pass + 4 directions × 2 (all/half)
+            ConvBlock(in_channels, 32),
+            ResidualBlock(32),
+            ConvBlock(32, 16),
+            nn.Conv2d(16, 9, 1)  # 9 actions: pass + 4 directions × 2 (all/half)
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -242,17 +239,15 @@ class ValueHead(nn.Module):
             ConvBlock(64, 32)
         )
         self.fc = nn.Sequential(
-            nn.Linear(32 * grid_size * grid_size, 512),
+            nn.Linear(32, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, 1)
+            nn.Linear(128, 1)
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(x)
+        x = F.adaptive_avg_pool2d(x, 1)
         x = x.view(x.size(0), -1)
         return self.fc(x)
 
