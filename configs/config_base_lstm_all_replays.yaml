@@ -1,5 +1,5 @@
 training:
-  batch_size: 100
+  batch_size: 4096
   learning_rate: 0.0003
   num_epochs: 70
   steps_per_epoch: 250
@@ -12,7 +12,7 @@ training:
   log_every: 100
   
   device: cuda
-  num_workers: 20
+  num_workers: 64
   mixed_precision: true
   lstm_dropout: 0.2  # Dropout applied to input of LSTM to force memory usage
 

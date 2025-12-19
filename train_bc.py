@@ -106,9 +106,18 @@ class BehaviorCloningTrainer:
         print(f"Train replays (streaming): {train_replays}")
         print(f"Validation replays: {val_replays}")
         
+        # Calculate per-worker batch size to achieve target effective batch size
+        effective_batch_size = train_config['batch_size']
+        num_workers = train_config['num_workers']
+        per_worker_batch_size = max(1, effective_batch_size // max(1, num_workers))
+        
+        print(f"Effective Batch Size: {effective_batch_size}")
+        print(f"Num Workers: {num_workers}")
+        print(f"Per-Worker Batch Size: {per_worker_batch_size}")
+        
         self.train_loader = create_iterable_dataloader(
             data_dir=data_config['data_dir'],
-            batch_size=train_config['batch_size'],
+            batch_size=per_worker_batch_size,
             grid_size=data_config['grid_size'],
             num_workers=train_config['num_workers'],
             max_replays=train_replays,
@@ -122,7 +131,7 @@ class BehaviorCloningTrainer:
         # Use same batch size and workers for validation to ensure speed
         self.val_loader = create_iterable_dataloader(
             data_dir=data_config['data_dir'],
-            batch_size=train_config['batch_size'], 
+            batch_size=per_worker_batch_size, 
             grid_size=data_config['grid_size'],
             num_workers=train_config['num_workers'],
             max_replays=val_replays,
@@ -320,7 +329,7 @@ class BehaviorCloningTrainer:
                 
                 # Compute dimensions once
                 grid_size = self.config['model']['grid_size']
-                hidden_dim = self.config['model']['base_channels'] * 8
+                hidden_dim = self.config['model']['base_channels'] * 4
                 bottleneck_size = grid_size // 8
                 
                 batch_sizes = []
