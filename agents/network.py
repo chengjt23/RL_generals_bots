@@ -61,9 +61,9 @@ class ResidualBlock(nn.Module):
     def __init__(self, channels: int, kernel_size: int = 3):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size, padding=kernel_size // 2)
-        self.norm1 = nn.BatchNorm2d(channels)
+        self.norm1 = nn.GroupNorm(8, channels)
         self.conv2 = nn.Conv2d(channels, channels, kernel_size, padding=kernel_size // 2)
-        self.norm2 = nn.BatchNorm2d(channels)
+        self.norm2 = nn.GroupNorm(8, channels)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
@@ -78,7 +78,7 @@ class ConvBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3):
         super().__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, padding=kernel_size // 2)
-        self.norm = nn.BatchNorm2d(out_channels)
+        self.norm = nn.GroupNorm(8, out_channels)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.relu(self.norm(self.conv(x)))
@@ -86,7 +86,7 @@ class ConvBlock(nn.Module):
 
 class UNetBackbone(nn.Module):
     """U-Net backbone with residual blocks and skip connections"""
-    def __init__(self, in_channels: int, base_channels: int = 64, dropout: float = 0.0):
+    def __init__(self, in_channels: int, base_channels: int = 32, dropout: float = 0.0):
         super().__init__()
         self.dropout = nn.Dropout2d(dropout) if dropout > 0 else nn.Identity()
         
@@ -179,9 +179,8 @@ class UNetBackbone(nn.Module):
         outputs = []
         
         for t in range(T):
-            # Apply dropout to input features before LSTM
-            # This forces the LSTM to rely on its hidden state (memory) when features are dropped
-            input_t = self.dropout(bottleneck_seq[:, t])
+            # No dropout before LSTM to preserve temporal consistency
+            input_t = bottleneck_seq[:, t]
             h, c = self.conv_lstm(input_t, (h, c))
             outputs.append(h)
             
@@ -200,14 +199,17 @@ class UNetBackbone(nn.Module):
         dec3 = torch.cat([dec3, enc3], dim=1)
         dec3 = self.dec3(dec3)
         
+        dec3 = self.dropout(dec3)
+        
         dec2 = self.upconv2(dec3)
         dec2 = torch.cat([dec2, enc2], dim=1)
         dec2 = self.dec2(dec2)
+        dec2 = self.dropout(dec2)
         
         dec1 = self.upconv1(dec2)
         dec1 = torch.cat([dec1, enc1], dim=1)
         dec1 = self.dec1(dec1)
-        
+        dec1 = self.dropout(dec1)
         # Reshape back to (B, T, C, H, W)
         # Output shape: (B, T, base_channels, H, W)
         final_out = dec1.view(B, T, -1, H, W)
@@ -254,7 +256,7 @@ class ValueHead(nn.Module):
         x = x.view(x.size(0), -1)
         return self.fc(x)
 
-
+32
 class SOTANetwork(nn.Module):
     def __init__(self, obs_channels: int = 15, memory_channels: int = 18, grid_size: int = 24, base_channels: int = 64, dropout: float = 0.0):
         super().__init__()

@@ -51,20 +51,20 @@ try:
         obs_channels=15,
         memory_channels=18,
         grid_size=24,
-        base_channels=64,
+        base_channels=32,
     )
     print(f"   ✓ Model created with memory augmentation")
     
     total_params = sum(p.numel() for p in model.parameters())
     print(f"   ✓ Total parameters: {total_params:,}")
     
-    dummy_obs = torch.randn(2, 15, 24, 24)
-    dummy_memory = torch.randn(2, 18, 24, 24)
-    policy, value = model(dummy_obs, dummy_memory)
+    dummy_obs = torch.randn(2, 1, 15, 24, 24)
+    dummy_memory = torch.randn(2, 1, 18, 24, 24)
+    policy, value, _ = model(dummy_obs, dummy_memory)
     print(f"   ✓ Forward pass with memory: policy={policy.shape}, value={value.shape}")
     
     # Test without memory (should create zeros internally)
-    policy_no_mem, value_no_mem = model(dummy_obs, None)
+    policy_no_mem, value_no_mem, _ = model(dummy_obs, None)
     print(f"   ✓ Forward pass without memory: policy={policy_no_mem.shape}, value={value_no_mem.shape}")
 except Exception as e:
     print(f"   ✗ Error: {e}")

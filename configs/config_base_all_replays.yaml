@@ -31,7 +31,7 @@ data:
 model:
   obs_channels: 15
   memory_channels: 13
-  base_channels: 64
+  base_channels: 32
   grid_size: 24
 
 optimizer:
