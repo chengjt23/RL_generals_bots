@@ -46,7 +46,7 @@ scheduler:
   min_lr: 1.0e-6
 
 logging:
-  experiment_name: bc_lstm
+  experiment_name: new_lstm
   save_dir: experiments
   tensorboard: true
   use_wandb: true
