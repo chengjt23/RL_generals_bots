@@ -131,7 +131,8 @@ class UNetBackbone(nn.Module):
         )
         
         # Decoder with residual blocks
-        self.upconv3 = nn.ConvTranspose2d(base_channels * 8, base_channels * 4, 2, stride=2)
+        # Input channels doubled to accommodate skip connection from bottleneck
+        self.upconv3 = nn.ConvTranspose2d(base_channels * 16, base_channels * 4, 2, stride=2)
         self.dec3 = nn.Sequential(
             ConvBlock(base_channels * 8, base_channels * 4),
             ResidualBlock(base_channels * 4),
@@ -191,8 +192,11 @@ class UNetBackbone(nn.Module):
         # Reshape for Decoder: (B*T, C, H, W)
         lstm_out_reshaped = lstm_out.view(B * T, C_b, H_b, W_b)
         
+        # Concatenate LSTM output with original bottleneck features (skip connection)
+        decoder_input = torch.cat([lstm_out_reshaped, bottleneck], dim=1)
+        
         # Decoder with skip connections
-        dec3 = self.upconv3(lstm_out_reshaped)
+        dec3 = self.upconv3(decoder_input)
         dec3 = torch.cat([dec3, enc3], dim=1)
         dec3 = self.dec3(dec3)
         
