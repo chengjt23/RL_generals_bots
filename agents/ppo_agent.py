@@ -231,8 +231,8 @@ class PPOAgent(Agent):
             max_army = np.max(obs_np[0])
             target_max = 200.0
             scale = 1.0
-            if max_army > target_max:
-                scale = target_max / max_army
+            # if max_army > target_max:
+            #     scale = target_max / max_army
             
             obs_np[0] *= scale
             if obs_np.shape[0] > 12:
@@ -255,8 +255,16 @@ class PPOAgent(Agent):
         obs_batch = obs_buffer[:batch_size].to(device, non_blocking=True)
         mem_batch = mem_buffer[:batch_size].to(device, non_blocking=True)
         
-        with torch.no_grad():
-            policy_logits_batch, values_batch = self.network(obs_batch, mem_batch)
+        # DEBUG: Print stats
+        # if np.random.rand() < 0.05:
+        #     print(f"[ACT] Obs Mean: {obs_batch.float().mean().item():.4f}, Std: {obs_batch.float().std().item():.4f}, Max: {obs_batch.float().max().item():.4f}")
+        #     print(f"[ACT] Mem Mean: {mem_batch.float().mean().item():.4f}, Std: {mem_batch.float().std().item():.4f}, Max: {mem_batch.float().max().item():.4f}")
+        
+        # with torch.no_grad():
+        #     policy_logits_batch, values_batch = self.network(obs_batch, mem_batch)
+        #     if np.random.rand() < 0.05:
+        #          print(f"[ACT] Logits Mean: {policy_logits_batch.mean().item():.4f}, Std: {policy_logits_batch.std().item():.4f}")
+
         
         actions = []
         log_probs = []
@@ -285,7 +293,16 @@ class PPOAgent(Agent):
         return value.squeeze(0).item()
     
     def evaluate_actions(self, obs_batch, memory_batch, action_batch, observations=None, valid_masks=None):
+        # DEBUG: Print stats
+        if np.random.rand() < 0.05:
+            print(f"[EVAL] Obs Mean: {obs_batch.float().mean().item():.4f}, Std: {obs_batch.float().std().item():.4f}, Max: {obs_batch.float().max().item():.4f}")
+            print(f"[EVAL] Mem Mean: {memory_batch.float().mean().item():.4f}, Std: {memory_batch.float().std().item():.4f}, Max: {memory_batch.float().max().item():.4f}")
+
         policy_logits, values = self.network(obs_batch, memory_batch)
+        
+        if np.random.rand() < 0.05:
+             print(f"[EVAL] Logits Mean: {policy_logits.mean().item():.4f}, Std: {policy_logits.std().item():.4f}")
+
         
         # with torch.no_grad():
         #     p_max = policy_logits.max().item()
@@ -355,10 +372,10 @@ class PPOAgent(Agent):
         # This prevents numerical explosion while preserving relative magnitudes.
         max_army = np.max(tensor[0])
         target_max = 200.0
-        if max_army > target_max:
-            self._current_scale = target_max / max_army
-        else:
-            self._current_scale = 1.0
+        # if max_army > target_max:
+        #     self._current_scale = target_max / max_army
+        # else:
+        self._current_scale = 1.0
             
         tensor[0] *= self._current_scale
         
@@ -497,9 +514,9 @@ class PPOAgent(Agent):
         all_logits = np.array([pass_logit] + masked_logits)
         probs = torch.softmax(torch.from_numpy(all_logits), dim=0).numpy()
         
-        top_probs, top_indices = torch.topk(torch.from_numpy(probs), k=3)
-        print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
-        print(f"Top 5 Actions Indices: {top_indices.tolist()}")
+        # top_probs, top_indices = torch.topk(torch.from_numpy(probs), k=3)
+        # print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
+        # print(f"Top 5 Actions Indices: {top_indices.tolist()}")
         
         choice = np.argmax(all_logits)
         
@@ -539,9 +556,9 @@ class PPOAgent(Agent):
         probs = torch.softmax(masked_logits, dim=0)
         log_probs = torch.log_softmax(masked_logits, dim=0)
         
-        top_probs, top_indices = torch.topk(probs, k=5)
-        print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
-        print(f"Top 5 Actions Indices: {top_indices.tolist()}")
+        # top_probs, top_indices = torch.topk(probs, k=5)
+        # print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
+        # print(f"Top 5 Actions Indices: {top_indices.tolist()}")
         
         choice = torch.multinomial(probs, num_samples=1).item()
         selected_log_prob = log_probs[choice].item()

@@ -341,31 +341,31 @@ class PPOTrainer:
                 return_details=True
             )
             
-            if (step == 0 or (step % 1 == 0 and step > 0)) and step % 20 == 0:
-                print(f"\n{'='*80}")
-                print(f"[REWARD DETAILS] Step {step}, Sample from env 0:")
-                print(f"{'='*80}")
-                if reward_details and len(reward_details) > 0:
-                    det = reward_details[0]
-                    print(f"  Original Reward (win/loss): {det['original_reward']:.4f}")
-                    print(f"    - Agent Generals: {det['agent_generals']} (prior: {det['prior_generals']})")
-                    print(f"  Potential Current: {det['potential_current']:.6f}")
-                    print(f"    - Agent Land: {det['agent_land']}, Enemy Land: {det['enemy_land']}")
-                    print(f"    - Agent Army: {det['agent_army']}, Enemy Army: {det['enemy_army']}")
-                    print(f"    - Agent Castles: {det['agent_castles']}, Enemy Castles: {det['enemy_castles']}")
-                    print(f"  Potential Prior: {det['potential_prior']:.6f}")
-                    print(f"    - Prior Agent Land: {det['prior_agent_land']}, Prior Enemy Land: {det['prior_enemy_land']}")
-                    print(f"    - Prior Agent Army: {det['prior_agent_army']}, Prior Enemy Army: {det['prior_enemy_army']}")
-                    print(f"    - Prior Agent Castles: {det['prior_agent_castles']}, Prior Enemy Castles: {det['prior_enemy_castles']}")
-                    print(f"  Potential Diff (γ*φ_current - φ_prior): {det['potential_diff']:.6f}")
-                    print(f"    - γ = {self.reward_fn.gamma:.4f}")
-                    print(f"  Pass Penalty: {det['pass_penalty']:.4f}")
-                    print(f"  Loop Penalty: {det['loop_penalty']:.4f}")
-                    print(f"  Step Penalty: {det['step_penalty']:.4f}")
-                    print(f"  {'-'*80}")
-                    print(f"  FINAL REWARD: {det['final_reward']:.6f}")
-                    print(f"    = {det['original_reward']:.4f} + {det['potential_diff']:.6f} + {det['pass_penalty']:.4f} + {det['loop_penalty']:.4f} + {det['step_penalty']:.4f}")
-                    print(f"{'='*80}\n")
+            # if (step == 0 or (step % 1 == 0 and step > 0)) and step % 20 == 0:
+            #     print(f"\n{'='*80}")
+            #     print(f"[REWARD DETAILS] Step {step}, Sample from env 0:")
+            #     print(f"{'='*80}")
+            #     if reward_details and len(reward_details) > 0:
+            #         det = reward_details[0]
+            #         print(f"  Original Reward (win/loss): {det['original_reward']:.4f}")
+            #         print(f"    - Agent Generals: {det['agent_generals']} (prior: {det['prior_generals']})")
+            #         print(f"  Potential Current: {det['potential_current']:.6f}")
+            #         print(f"    - Agent Land: {det['agent_land']}, Enemy Land: {det['enemy_land']}")
+            #         print(f"    - Agent Army: {det['agent_army']}, Enemy Army: {det['enemy_army']}")
+            #         print(f"    - Agent Castles: {det['agent_castles']}, Enemy Castles: {det['enemy_castles']}")
+            #         print(f"  Potential Prior: {det['potential_prior']:.6f}")
+            #         print(f"    - Prior Agent Land: {det['prior_agent_land']}, Prior Enemy Land: {det['prior_enemy_land']}")
+            #         print(f"    - Prior Agent Army: {det['prior_agent_army']}, Prior Enemy Army: {det['prior_enemy_army']}")
+            #         print(f"    - Prior Agent Castles: {det['prior_agent_castles']}, Prior Enemy Castles: {det['prior_enemy_castles']}")
+            #         print(f"  Potential Diff (γ*φ_current - φ_prior): {det['potential_diff']:.6f}")
+            #         print(f"    - γ = {self.reward_fn.gamma:.4f}")
+            #         print(f"  Pass Penalty: {det['pass_penalty']:.4f}")
+            #         print(f"  Loop Penalty: {det['loop_penalty']:.4f}")
+            #         print(f"  Step Penalty: {det['step_penalty']:.4f}")
+            #         print(f"  {'-'*80}")
+            #         print(f"  FINAL REWARD: {det['final_reward']:.6f}")
+            #         print(f"    = {det['original_reward']:.4f} + {det['potential_diff']:.6f} + {det['pass_penalty']:.4f} + {det['loop_penalty']:.4f} + {det['step_penalty']:.4f}")
+            #         print(f"{'='*80}\n")
 
             reset_envs = []
             
@@ -491,6 +491,28 @@ class PPOTrainer:
                 
                 new_log_probs, new_values, entropies = self.agent.evaluate_actions(obs, mem, actions, valid_masks=vm_tensor)
                 
+                # DEBUG LOGGING
+                if n_updates % 10 == 0:
+                    with open("debug_kl.txt", "a") as f:
+                        f.write(f"\nUpdate {n_updates} Epoch {epoch}\n")
+                        diff = (new_log_probs - old_log_probs)
+                        abs_diff = diff.abs()
+                        f.write(f"LogProb Diff - Mean: {abs_diff.mean().item():.6f}, Max: {abs_diff.max().item():.6f}\n")
+                        f.write(f"Old LogProbs (first 5): {old_log_probs[:5].tolist()}\n")
+                        f.write(f"New LogProbs (first 5): {new_log_probs[:5].tolist()}\n")
+                        
+                        val_diff = (new_values - old_values).abs()
+                        f.write(f"Value Diff - Mean: {val_diff.mean().item():.6f}, Max: {val_diff.max().item():.6f}\n")
+                        
+                        # Check for mask mismatch
+                        mask_mismatch = (old_log_probs > -100) & (new_log_probs < -1000)
+                        if mask_mismatch.any():
+                            f.write(f"MASK MISMATCH DETECTED! Count: {mask_mismatch.sum().item()}\n")
+                            indices = torch.where(mask_mismatch)[0]
+                            f.write(f"Mismatch Indices: {indices[:5].tolist()}\n")
+                            f.write(f"Old LogProbs at mismatch: {old_log_probs[indices[:5]].tolist()}\n")
+                            f.write(f"New LogProbs at mismatch: {new_log_probs[indices[:5]].tolist()}\n")
+
                 ratio = torch.exp(new_log_probs - old_log_probs)
                 
                 # with torch.no_grad():

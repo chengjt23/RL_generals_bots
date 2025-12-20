@@ -11,7 +11,7 @@ model:
 
 training:
   total_iterations: 10000
-  n_steps_per_update: 2048 # 2048
+  n_steps_per_update: 128 # Reduced for debugging
   n_parallel_envs: 16 # 16
   batch_size: 512 # 512
   ppo_epochs: 4
