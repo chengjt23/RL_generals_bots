@@ -1,7 +1,7 @@
 experiment:
   name: ppo_selfplay_ratio
   save_dir: experiments
-  bc_pretrain_path: /root/shared-nvme/cjt/experiments/bc_new_mem_all_replays_20251218_233422/checkpoints/epoch_14_loss_1.8876.pt
+  bc_pretrain_path: /root/shared-nvme/cyh/RL_generals_bots/experiments/bc_new_mem_all_replays_20251218_014906/checkpoints/epoch_37_loss_1.7065.pt
 
 model:
   obs_channels: 15
