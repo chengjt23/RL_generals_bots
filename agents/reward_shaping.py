@@ -57,7 +57,7 @@ class PotentialBasedRewardFn(RewardFn):
         
         return original_reward + self.gamma * potential_current - potential_prior
     
-    def compute_batch(self, prior_obs_list, next_obs_list, prior_actions=None, return_details=False):
+    def compute_batch(self, prior_obs_list, next_obs_list, prior_actions=None, external_rewards=None, return_details=False):
         n = len(prior_obs_list)
         rewards = np.empty(n, dtype=np.float32)
         reward_details = [] if return_details else None
@@ -69,7 +69,9 @@ class PotentialBasedRewardFn(RewardFn):
             agent_generals = (obs.generals & obs.owned_cells).sum()
             prior_generals = (prior_obs.generals & prior_obs.owned_cells).sum()
             
-            if agent_generals > prior_generals:
+            if external_rewards is not None:
+                original_reward = external_rewards[i]
+            elif agent_generals > prior_generals:
                 original_reward = 1.0
             elif agent_generals < prior_generals:
                 original_reward = -1.0
@@ -84,22 +86,23 @@ class PotentialBasedRewardFn(RewardFn):
             
             pass_penalty = 0.0
             loop_penalty = 0.0
-            step_penalty = -0.005 # Small base cost for any move to encourage efficiency
+            step_penalty = -0.001 # Very small cost for moving
             
             if prior_actions is not None:
                 act = prior_actions[i]
                 is_pass = act.is_pass()
                 if is_pass:
-                    pass_penalty = -0.01
-                    step_penalty = 0.0 # No step penalty if passing
+                    pass_penalty = -0.001 # Equal cost for passing
+                    step_penalty = 0.0
                 else:
-                    # Loop Penalty Logic:
-                    # If we moved (not passed), but potential didn't increase significantly,
-                    # it means we made a useless move (e.g. moving back and forth A->B->A).
-                    # We punish this HEAVILY to force the agent to Pass instead of Loop.
-                    # Condition: Not passing AND potential gain is negligible.
-                    if potential_diff <= 0.001:
-                        loop_penalty = -0.005
+                    # [REMOVED AGGRESSIVE LOOP PENALTY]
+                    # Previously, we punished any move with potential_diff <= 0.001.
+                    # This was too harsh and punished valid maneuvers (gathering armies, deploying).
+                    # Now we rely on the main Potential Reward to guide the agent.
+                    # We keep a tiny step_penalty to prefer shorter paths if all else is equal.
+                    pass
+            
+            r += pass_penalty + step_penalty + loop_penalty
             
             r += pass_penalty + step_penalty + loop_penalty
             

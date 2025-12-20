@@ -19,15 +19,16 @@ training:
   gamma: 0.99
   gae_lambda: 0.95
   
-  clip_epsilon: 0.2
+  clip_epsilon: 0.1 # Reduced from 0.2 to constrain policy updates
   value_clip_epsilon: 0.2
   value_loss_coef: 0.5
-  entropy_coef: 0.01
+  entropy_coef: 0.0 # Set to 0.0 for BC fine-tuning to prevent policy collapse
   
-  learning_rate: 0.0001
+  learning_rate: 0.000001 # Reduced from 1e-5 to 1e-6 for stable fine-tuning
   max_grad_norm: 0.5
   
-  value_warmup_iterations: 10  # Freeze policy for first 10 updates to train Value Function
+  lock_backbone: true # [CRITICAL] Freeze backbone to preserve BC features
+  value_warmup_iterations: 5  # Freeze policy for first 10 updates to train Value Function
   warmup_iterations: 0
   eval_frequency: 25
   save_frequency: 1 # 50

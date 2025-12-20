@@ -100,6 +100,10 @@ class PPOTrainer:
             memory_channels=self.config['model']['memory_channels'],
         )
         
+        if self.config['training'].get('lock_backbone', False):
+            print("[Setup] Locking Backbone (UNet) parameters...")
+            self.agent.network.backbone.requires_grad_(False)
+        
         self.agent.network.train()
     
     def setup_envs(self):
@@ -153,8 +157,10 @@ class PPOTrainer:
         )
     
     def setup_optimizer(self):
+        # Only optimize parameters that require gradients
+        params = filter(lambda p: p.requires_grad, self.agent.network.parameters())
         self.optimizer = torch.optim.Adam(
-            self.agent.network.parameters(),
+            params,
             lr=self.config['training']['learning_rate']
         )
     
@@ -326,7 +332,14 @@ class PPOTrainer:
             next_obs_dicts = list(next_obs_dicts)
 
             next_agent_obs = [next_obs_dicts[i]["Agent"] for i in range(n_envs)]
-            rewards, reward_details = self.reward_fn.compute_batch(prior_observations, next_agent_obs, prior_actions=agent_actions, return_details=True)
+            agent_env_rewards = [rewards_dicts[i]["Agent"] for i in range(n_envs)]
+            rewards, reward_details = self.reward_fn.compute_batch(
+                prior_observations, 
+                next_agent_obs, 
+                prior_actions=agent_actions, 
+                external_rewards=agent_env_rewards,
+                return_details=True
+            )
             
             if (step == 0 or (step % 1 == 0 and step > 0)) and step % 20 == 0:
                 print(f"\n{'='*80}")
@@ -464,7 +477,11 @@ class PPOTrainer:
                 
                 advantages = torch.clamp(advantages, -2.0, 2.0)
                 
-                # advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                # [CRITICAL FIX] Enable Advantage Normalization
+                # Without this, if all rewards are negative (penalties), advantages will be negative,
+                # causing the agent to unlearn its BC policy (suppressing likely actions).
+                # Normalization ensures "less bad" actions get positive advantage.
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
                 
                 valid_masks = batch.get('valid_masks', None)
                 vm_tensor = None
@@ -500,6 +517,10 @@ class PPOTrainer:
                 
                 entropy = entropies.mean()
                 
+                # Calculate approximate KL divergence for monitoring
+                with torch.no_grad():
+                    approx_kl = ((ratio - 1) - torch.log(ratio)).mean().item()
+                
                 loss = policy_loss + value_loss_coef * value_loss - entropy_coef * entropy 
                 # loss = value_loss_coef * value_loss - entropy_coef * entropy
                 # print(f"policy_loss: {policy_loss}")
@@ -510,45 +531,6 @@ class PPOTrainer:
                 self.optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.agent.network.parameters(), max_grad_norm)
-                
-                # if n_updates == 0:
-                #     print("\n" + "="*50)
-                #     print("FIRST UPDATE GRADIENT AUDIT")
-                #     print("="*50)
-                    
-                #     backbone_grad = 0.0
-                #     policy_grad = 0.0
-                #     value_grad = 0.0
-                    
-                #     for name, param in self.agent.network.named_parameters():
-                #         if param.grad is not None:
-                #             g_norm = param.grad.norm().item()
-                #             p_norm = param.data.norm().item()
-                            
-                #             update_ratio = g_norm / (p_norm + 1e-8)
-                            
-                #             if 'backbone' in name:
-                #                 backbone_grad += g_norm
-                #             elif 'policy_head' in name:
-                #                 policy_grad += g_norm
-                #             elif 'value_head' in name:
-                #                 value_grad += g_norm
-
-                #             if update_ratio > 0.05:
-                #                 print(f"[SHOCK ALERT] Layer: {name:30} | Grad: {g_norm:.6f} | Ratio: {update_ratio:.4f}")
-
-                #     print("-" * 50)
-                #     print(f"Total Backbone Grad Norm: {backbone_grad:.6f}")
-                #     print(f"Total Policy Head Grad Norm: {policy_grad:.6f}")
-                #     print(f"Total Value Head Grad Norm: {value_grad:.6f}")
-                    
-                #     has_nan = False
-                #     for p in self.agent.network.parameters():
-                #         if p.grad is not None and torch.any(p.grad.isnan()):
-                #             has_nan = True
-                #             break
-                #     print(f"Gradient Contains NaN: {has_nan}")
-                #     print("="*50 + "\n")
                 
                 self.optimizer.step()
                 
@@ -561,6 +543,7 @@ class PPOTrainer:
             'policy_loss': total_policy_loss / n_updates,
             'value_loss': total_value_loss / n_updates,
             'entropy': total_entropy / n_updates,
+            'approx_kl': approx_kl, # Log KL divergence
         }
     
     def train(self):
@@ -602,17 +585,24 @@ class PPOTrainer:
             # Freeze Policy and Backbone for the first few iterations to let Value Function catch up.
             # This prevents the random Value Function from destroying the BC-pretrained Policy.
             value_warmup_iters = self.config['training'].get('value_warmup_iterations', 10)
+            lock_backbone = self.config['training'].get('lock_backbone', False)
+            
             if iteration < value_warmup_iters:
-                self.agent.network.backbone.requires_grad_(False)
+                if not lock_backbone:
+                    self.agent.network.backbone.requires_grad_(False)
                 self.agent.network.policy_head.requires_grad_(False)
                 self.agent.network.value_head.requires_grad_(True)
                 if iteration == 0:
                     print(f"\n[Warmup] Freezing Policy & Backbone for {value_warmup_iters} iterations to train Value Function.")
             elif iteration == value_warmup_iters:
-                self.agent.network.backbone.requires_grad_(True)
                 self.agent.network.policy_head.requires_grad_(True)
                 self.agent.network.value_head.requires_grad_(True)
-                print(f"\n[Warmup] Warmup complete. Unfreezing all layers.")
+                
+                if not lock_backbone:
+                    self.agent.network.backbone.requires_grad_(True)
+                    print(f"\n[Warmup] Warmup complete. Unfreezing ALL layers.")
+                else:
+                    print(f"\n[Warmup] Warmup complete. Unfreezing Policy Head (Backbone remains LOCKED).")
 
             episode_rewards, episode_results = self.collect_trajectories()
             

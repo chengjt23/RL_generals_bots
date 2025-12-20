@@ -40,17 +40,6 @@ class PPOAgent(Agent):
             else:
                 state = ckpt
             self.network.load_state_dict(state)
-            
-            # [CRITICAL FIX]
-            # BC training does not train the Value Head, so it contains random noise.
-            # We re-initialize the Value Head's final layer to output near-zero values.
-            # This ensures V(s) starts near 0, making Advantage ~= Reward, reducing variance.
-            print("[PPOAgent] Re-initializing Value Head final layer to near-zero...")
-            for name, param in self.network.value_head.named_parameters():
-                if 'weight' in name and 'fc.6' in name: # The last linear layer
-                    torch.nn.init.normal_(param, mean=0.0, std=0.01)
-                elif 'bias' in name and 'fc.6' in name:
-                    torch.nn.init.constant_(param, 0.0)
         
         self.memory = MemoryAugmentation((grid_size, grid_size), decay=0.95)
         self.last_action = None
@@ -308,8 +297,7 @@ class PPOAgent(Agent):
         batch_size, channels, h, w = policy_logits.shape
         device = policy_logits.device
         
-        # Use mean of the pass channel across spatial dimensions instead of just (0,0)
-        pass_logits = policy_logits[:, 0:1, :, :].mean(dim=(2, 3))
+        pass_logits = policy_logits[:, 0:1, 0, 0]
         move_logits = policy_logits[:, 1:9, :, :].reshape(batch_size, -1)
         flat_logits = torch.cat([pass_logits, move_logits], dim=1)
         
@@ -339,7 +327,9 @@ class PPOAgent(Agent):
         final_indices = torch.where(is_pass == 1, torch.zeros_like(action_indices), action_indices)
         selected_log_probs = log_probs_all.gather(1, final_indices.unsqueeze(1)).squeeze(1)
         
-        entropy = -(probs_all * log_probs_all).sum(dim=1)
+        # Use Categorical distribution for stable entropy calculation
+        dist = torch.distributions.Categorical(logits=flat_logits)
+        entropy = dist.entropy()
         
         return selected_log_probs, values.squeeze(-1), entropy
     
@@ -444,8 +434,7 @@ class PPOAgent(Agent):
         
         h, w = valid_mask.shape[:2]
         
-        # Use mean of the pass channel across spatial dimensions instead of just (0,0)
-        pass_logit = np.mean(policy_logits_np[0])
+        pass_logit = policy_logits_np[0, 0, 0]
         
         action_logits = policy_logits_np[1:9].reshape(4, 2, h, w)
         
@@ -484,8 +473,7 @@ class PPOAgent(Agent):
         
         h, w = valid_mask.shape[:2]
         
-        # Use mean of the pass channel across spatial dimensions instead of just (0,0)
-        pass_logit = np.mean(policy_logits_np[0])
+        pass_logit = policy_logits_np[0, 0, 0]
         
         action_logits = policy_logits_np[1:9].reshape(4, 2, h, w)
         
@@ -509,9 +497,9 @@ class PPOAgent(Agent):
         all_logits = np.array([pass_logit] + masked_logits)
         probs = torch.softmax(torch.from_numpy(all_logits), dim=0).numpy()
         
-        # top_probs, top_indices = torch.topk(torch.from_numpy(probs), k=3)
-        # print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
-        # print(f"Top 5 Actions Indices: {top_indices.tolist()}")
+        top_probs, top_indices = torch.topk(torch.from_numpy(probs), k=3)
+        print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
+        print(f"Top 5 Actions Indices: {top_indices.tolist()}")
         
         choice = np.argmax(all_logits)
         
@@ -535,8 +523,7 @@ class PPOAgent(Agent):
         h, w = self.grid_size, self.grid_size
         device = policy_logits.device
         
-        # Use mean of the pass channel across spatial dimensions instead of just (0,0)
-        pass_logits = policy_logits[0:1, :, :].mean(dim=(1, 2))
+        pass_logits = policy_logits[0:1, 0, 0]
         move_logits = policy_logits[1:9, :, :].reshape(-1)
         flat_logits = torch.cat([pass_logits, move_logits], dim=0)
         
@@ -552,9 +539,9 @@ class PPOAgent(Agent):
         probs = torch.softmax(masked_logits, dim=0)
         log_probs = torch.log_softmax(masked_logits, dim=0)
         
-        # top_probs, top_indices = torch.topk(probs, k=5)
-        # print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
-        # print(f"Top 5 Actions Indices: {top_indices.tolist()}")
+        top_probs, top_indices = torch.topk(probs, k=5)
+        print(f"Top 5 Actions Probabilities: {top_probs.tolist()}")
+        print(f"Top 5 Actions Indices: {top_indices.tolist()}")
         
         choice = torch.multinomial(probs, num_samples=1).item()
         selected_log_prob = log_probs[choice].item()
