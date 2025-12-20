@@ -40,6 +40,17 @@ class PPOAgent(Agent):
             else:
                 state = ckpt
             self.network.load_state_dict(state)
+            
+            # [CRITICAL FIX]
+            # BC training does not train the Value Head, so it contains random noise.
+            # We re-initialize the Value Head's final layer to output near-zero values.
+            # This ensures V(s) starts near 0, making Advantage ~= Reward, reducing variance.
+            print("[PPOAgent] Re-initializing Value Head final layer to near-zero...")
+            for name, param in self.network.value_head.named_parameters():
+                if 'weight' in name and 'fc.6' in name: # The last linear layer
+                    torch.nn.init.normal_(param, mean=0.0, std=0.01)
+                elif 'bias' in name and 'fc.6' in name:
+                    torch.nn.init.constant_(param, 0.0)
         
         self.memory = MemoryAugmentation((grid_size, grid_size), decay=0.95)
         self.last_action = None
@@ -218,19 +229,40 @@ class PPOAgent(Agent):
         
         obs_np_list = []
         mem_np_list = []
+        
+        # Optimization: Process numpy arrays on CPU and copy directly to pinned memory buffer
+        # Avoids individual GPU transfers and GPU->CPU copies
         for i in range(batch_size):
             obs = observations[i]
-            obs_tensor = self._prepare_observation(obs)
-            mem_tensor = self._prepare_memory_from_memory(memories[i])
+            obs.pad_observation(pad_to=self.grid_size)
             
-            obs_buffer[i].copy_(obs_tensor.squeeze(0))
-            mem_buffer[i].copy_(mem_tensor.squeeze(0))
+            obs_np = obs.as_tensor().astype(np.float32)
             
-            obs_np = obs_tensor.squeeze(0).cpu().numpy()
-            mem_np = mem_tensor.squeeze(0).cpu().numpy()
+            # Dynamic Scaling Logic (Inline to avoid state issues and overhead)
+            max_army = np.max(obs_np[0])
+            target_max = 200.0
+            scale = 1.0
+            if max_army > target_max:
+                scale = target_max / max_army
+            
+            obs_np[0] *= scale
+            if obs_np.shape[0] > 12:
+                obs_np[10] *= scale
+                obs_np[12] *= scale
+            
+            mem_np = memories[i].get_memory_features().astype(np.float32)
+            if scale != 1.0:
+                mem_np[3] *= scale
+                mem_np[6] *= scale
+            
             obs_np_list.append(obs_np)
             mem_np_list.append(mem_np)
+            
+            # Copy to pinned memory buffer (CPU -> CPU copy)
+            obs_buffer[i] = torch.from_numpy(obs_np)
+            mem_buffer[i] = torch.from_numpy(mem_np)
         
+        # Batch transfer to GPU (Async)
         obs_batch = obs_buffer[:batch_size].to(device, non_blocking=True)
         mem_batch = mem_buffer[:batch_size].to(device, non_blocking=True)
         
@@ -241,11 +273,15 @@ class PPOAgent(Agent):
         log_probs = []
         values = []
         
+        # Move results to CPU once to avoid synchronization overhead in loop
+        policy_logits_batch_cpu = policy_logits_batch.cpu()
+        values_batch_cpu = values_batch.cpu()
+        
         for i in range(batch_size):
-            action, log_prob = self._sample_action_with_log_prob(policy_logits_batch[i], observations[i])
+            action, log_prob = self._sample_action_with_log_prob(policy_logits_batch_cpu[i], observations[i])
             actions.append(action)
             log_probs.append(log_prob)
-            values.append(values_batch[i].item())
+            values.append(values_batch_cpu[i].item())
         
         return actions, log_probs, values, obs_np_list, mem_np_list
     
@@ -272,7 +308,8 @@ class PPOAgent(Agent):
         batch_size, channels, h, w = policy_logits.shape
         device = policy_logits.device
         
-        pass_logits = policy_logits[:, 0:1, 0, 0]
+        # Use mean of the pass channel across spatial dimensions instead of just (0,0)
+        pass_logits = policy_logits[:, 0:1, :, :].mean(dim=(2, 3))
         move_logits = policy_logits[:, 1:9, :, :].reshape(batch_size, -1)
         flat_logits = torch.cat([pass_logits, move_logits], dim=1)
         
@@ -407,7 +444,8 @@ class PPOAgent(Agent):
         
         h, w = valid_mask.shape[:2]
         
-        pass_logit = policy_logits_np[0, 0, 0]
+        # Use mean of the pass channel across spatial dimensions instead of just (0,0)
+        pass_logit = np.mean(policy_logits_np[0])
         
         action_logits = policy_logits_np[1:9].reshape(4, 2, h, w)
         
@@ -446,7 +484,8 @@ class PPOAgent(Agent):
         
         h, w = valid_mask.shape[:2]
         
-        pass_logit = policy_logits_np[0, 0, 0]
+        # Use mean of the pass channel across spatial dimensions instead of just (0,0)
+        pass_logit = np.mean(policy_logits_np[0])
         
         action_logits = policy_logits_np[1:9].reshape(4, 2, h, w)
         
@@ -496,7 +535,8 @@ class PPOAgent(Agent):
         h, w = self.grid_size, self.grid_size
         device = policy_logits.device
         
-        pass_logits = policy_logits[0:1, 0, 0]
+        # Use mean of the pass channel across spatial dimensions instead of just (0,0)
+        pass_logits = policy_logits[0:1, :, :].mean(dim=(1, 2))
         move_logits = policy_logits[1:9, :, :].reshape(-1)
         flat_logits = torch.cat([pass_logits, move_logits], dim=0)
         

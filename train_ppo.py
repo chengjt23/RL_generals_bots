@@ -22,6 +22,12 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
 
+try:
+    import swanlab
+    SWANLAB_AVAILABLE = True
+except ImportError:
+    SWANLAB_AVAILABLE = False
+
 
 _PASS_ACTION_ARRAY = np.array([1, 0, 0, 0, 0], dtype=np.int32)
 
@@ -56,7 +62,7 @@ class PPOTrainer:
         self.setup_opponent_pool()
         self.setup_reward_fn()
         self.setup_optimizer()
-        self.setup_wandb()
+        self.setup_logging()
         
         self.current_elo = self.config['opponent_pool']['initial_elo']
     
@@ -152,17 +158,38 @@ class PPOTrainer:
             lr=self.config['training']['learning_rate']
         )
     
-    def setup_wandb(self):
-        if WANDB_AVAILABLE and self.config['logging']['use_wandb']:
-            wandb.init(
-                project=self.config['logging']['project_name'],
-                entity=self.config['logging']['wandb_entity'],
-                name=self.exp_dir.name,
-                config=self.config
-            )
-            self.use_wandb = True
-        else:
-            self.use_wandb = False
+    def setup_logging(self):
+        self.use_wandb = False
+        self.use_swanlab = False
+        logging_cfg = self.config['logging']
+        
+        # SwanLab
+        if SWANLAB_AVAILABLE:
+            try:
+                swanlab.init(
+                    project=logging_cfg.get('wandb_project', 'generals-bc'),
+                    workspace=logging_cfg.get('wandb_entity', None),
+                    name=self.exp_dir.name,
+                    config=self.config
+                )
+                self.use_swanlab = True
+                print(f"[Logging] SwanLab initialized. Project: {logging_cfg.get('wandb_project')}, Workspace: {logging_cfg.get('wandb_entity')}")
+            except Exception as e:
+                print(f"[Logging] SwanLab init failed: {e}")
+        
+        # WandB
+        if WANDB_AVAILABLE and logging_cfg.get('use_wandb', False):
+            try:
+                wandb.init(
+                    project=logging_cfg.get('wandb_project'),
+                    entity=logging_cfg.get('wandb_entity'),
+                    name=self.exp_dir.name,
+                    config=self.config,
+                    tags=logging_cfg.get('wandb_tags', [])
+                )
+                self.use_wandb = True
+            except Exception as e:
+                print(f"[Logging] WandB init failed: {e}")
     
     def _build_opponent_groups(self, current_opponents, opponent_memories):
         network_groups = {}
@@ -301,29 +328,31 @@ class PPOTrainer:
             next_agent_obs = [next_obs_dicts[i]["Agent"] for i in range(n_envs)]
             rewards, reward_details = self.reward_fn.compute_batch(prior_observations, next_agent_obs, prior_actions=agent_actions, return_details=True)
             
-            # if step == 0 or (step % 1 == 0 and step > 0):
-            #     print(f"\n{'='*80}")
-            #     print(f"[REWARD DETAILS] Step {step}, Sample from env 0:")
-            #     print(f"{'='*80}")
-            #     if reward_details and len(reward_details) > 0:
-            #         det = reward_details[0]
-            #         print(f"  Original Reward (win/loss): {det['original_reward']:.4f}")
-            #         print(f"    - Agent Generals: {det['agent_generals']} (prior: {det['prior_generals']})")
-            #         print(f"  Potential Current: {det['potential_current']:.6f}")
-            #         print(f"    - Agent Land: {det['agent_land']}, Enemy Land: {det['enemy_land']}")
-            #         print(f"    - Agent Army: {det['agent_army']}, Enemy Army: {det['enemy_army']}")
-            #         print(f"    - Agent Castles: {det['agent_castles']}, Enemy Castles: {det['enemy_castles']}")
-            #         print(f"  Potential Prior: {det['potential_prior']:.6f}")
-            #         print(f"    - Prior Agent Land: {det['prior_agent_land']}, Prior Enemy Land: {det['prior_enemy_land']}")
-            #         print(f"    - Prior Agent Army: {det['prior_agent_army']}, Prior Enemy Army: {det['prior_enemy_army']}")
-            #         print(f"    - Prior Agent Castles: {det['prior_agent_castles']}, Prior Enemy Castles: {det['prior_enemy_castles']}")
-            #         print(f"  Potential Diff (γ*φ_current - φ_prior): {det['potential_diff']:.6f}")
-            #         print(f"    - γ = {self.reward_fn.gamma:.4f}")
-            #         print(f"  Pass Penalty: {det['pass_penalty']:.4f}")
-            #         print(f"  {'-'*80}")
-            #         print(f"  FINAL REWARD: {det['final_reward']:.6f}")
-            #         print(f"    = {det['original_reward']:.4f} + {det['potential_diff']:.6f} + {det['pass_penalty']:.4f}")
-            #         print(f"{'='*80}\n")
+            if (step == 0 or (step % 1 == 0 and step > 0)) and step % 20 == 0:
+                print(f"\n{'='*80}")
+                print(f"[REWARD DETAILS] Step {step}, Sample from env 0:")
+                print(f"{'='*80}")
+                if reward_details and len(reward_details) > 0:
+                    det = reward_details[0]
+                    print(f"  Original Reward (win/loss): {det['original_reward']:.4f}")
+                    print(f"    - Agent Generals: {det['agent_generals']} (prior: {det['prior_generals']})")
+                    print(f"  Potential Current: {det['potential_current']:.6f}")
+                    print(f"    - Agent Land: {det['agent_land']}, Enemy Land: {det['enemy_land']}")
+                    print(f"    - Agent Army: {det['agent_army']}, Enemy Army: {det['enemy_army']}")
+                    print(f"    - Agent Castles: {det['agent_castles']}, Enemy Castles: {det['enemy_castles']}")
+                    print(f"  Potential Prior: {det['potential_prior']:.6f}")
+                    print(f"    - Prior Agent Land: {det['prior_agent_land']}, Prior Enemy Land: {det['prior_enemy_land']}")
+                    print(f"    - Prior Agent Army: {det['prior_agent_army']}, Prior Enemy Army: {det['prior_enemy_army']}")
+                    print(f"    - Prior Agent Castles: {det['prior_agent_castles']}, Prior Enemy Castles: {det['prior_enemy_castles']}")
+                    print(f"  Potential Diff (γ*φ_current - φ_prior): {det['potential_diff']:.6f}")
+                    print(f"    - γ = {self.reward_fn.gamma:.4f}")
+                    print(f"  Pass Penalty: {det['pass_penalty']:.4f}")
+                    print(f"  Loop Penalty: {det['loop_penalty']:.4f}")
+                    print(f"  Step Penalty: {det['step_penalty']:.4f}")
+                    print(f"  {'-'*80}")
+                    print(f"  FINAL REWARD: {det['final_reward']:.6f}")
+                    print(f"    = {det['original_reward']:.4f} + {det['potential_diff']:.6f} + {det['pass_penalty']:.4f} + {det['loop_penalty']:.4f} + {det['step_penalty']:.4f}")
+                    print(f"{'='*80}\n")
 
             reset_envs = []
             
@@ -569,6 +598,22 @@ class PPOTrainer:
             print(f"[Opponent Pool] Added initial agent to pool. Pool size: {len(self.opponent_pool)}\n")
         
         for iteration in tqdm(range(total_iterations), desc="Training"):
+            # [CRITICAL FIX] Value Function Warmup
+            # Freeze Policy and Backbone for the first few iterations to let Value Function catch up.
+            # This prevents the random Value Function from destroying the BC-pretrained Policy.
+            value_warmup_iters = self.config['training'].get('value_warmup_iterations', 10)
+            if iteration < value_warmup_iters:
+                self.agent.network.backbone.requires_grad_(False)
+                self.agent.network.policy_head.requires_grad_(False)
+                self.agent.network.value_head.requires_grad_(True)
+                if iteration == 0:
+                    print(f"\n[Warmup] Freezing Policy & Backbone for {value_warmup_iters} iterations to train Value Function.")
+            elif iteration == value_warmup_iters:
+                self.agent.network.backbone.requires_grad_(True)
+                self.agent.network.policy_head.requires_grad_(True)
+                self.agent.network.value_head.requires_grad_(True)
+                print(f"\n[Warmup] Warmup complete. Unfreezing all layers.")
+
             episode_rewards, episode_results = self.collect_trajectories()
             
             for opp_idx, agent_won in episode_results:
@@ -611,6 +656,9 @@ class PPOTrainer:
                 
                 if self.use_wandb:
                     wandb.log(log_dict, step=iteration)
+                
+                if self.use_swanlab:
+                    swanlab.log(log_dict, step=iteration)
             
             if iteration % save_frequency == 0:
                 self.save_checkpoint(iteration)

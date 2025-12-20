@@ -1,5 +1,5 @@
 experiment:
-  name: ppo_selfplay_with_log_bc
+  name: ppo_selfplay_ratio
   save_dir: experiments
   bc_pretrain_path: /root/shared-nvme/cjt/experiments/bc_new_mem_all_replays_20251218_233422/checkpoints/epoch_14_loss_1.8876.pt
 
@@ -27,6 +27,7 @@ training:
   learning_rate: 0.0001
   max_grad_norm: 0.5
   
+  value_warmup_iterations: 10  # Freeze policy for first 10 updates to train Value Function
   warmup_iterations: 0
   eval_frequency: 25
   save_frequency: 1 # 50
@@ -46,8 +47,9 @@ opponent_pool:
   warmup_iterations: 0
 
 reward:
-  land_weight: 0.4
-  army_weight: 0.3
+  land_weight: 0.3
+  army_weight: 0.8
+  castle_weight: 0.1
   castle_weight: 0.3
   max_ratio: 5.0 # 100.0
   gamma: 1.00
@@ -57,7 +59,10 @@ multi_gpu:
   strategy: ddp
 
 logging:
-  use_wandb: false
-  project_name: generals-rl-ppo
-  wandb_entity: null
+  experiment_name: ppo_cyh
+  save_dir: experiments
+  use_wandb: true
+  wandb_project: generals-ppo
+  wandb_entity: coc  # <--- Add this line
+  wandb_tags: [ppo]
 

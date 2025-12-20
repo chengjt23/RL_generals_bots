@@ -7,9 +7,9 @@ from generals.core.rewards import RewardFn
 class PotentialBasedRewardFn(RewardFn):
     def __init__(
         self,
-        land_weight: float = 0.3,
-        army_weight: float = 0.3,
-        castle_weight: float = 0.4,
+        land_weight: float = 0.3,   # Lowered from 0.7 to prevent map painting, but kept moderate for expansion
+        army_weight: float = 0.8,   # Increased significantly to discourage wasting troops on neutral cities
+        castle_weight: float = 0.1, # Kept low so agent doesn't suicide for cities
         max_ratio: float = 100.0,
         gamma: float = 0.99,
     ):
@@ -83,12 +83,25 @@ class PotentialBasedRewardFn(RewardFn):
             r = original_reward + potential_diff
             
             pass_penalty = 0.0
+            loop_penalty = 0.0
+            step_penalty = -0.005 # Small base cost for any move to encourage efficiency
+            
             if prior_actions is not None:
                 act = prior_actions[i]
                 is_pass = act.is_pass()
                 if is_pass:
-                    pass_penalty = -0.05
-                    r += pass_penalty
+                    pass_penalty = -0.01
+                    step_penalty = 0.0 # No step penalty if passing
+                else:
+                    # Loop Penalty Logic:
+                    # If we moved (not passed), but potential didn't increase significantly,
+                    # it means we made a useless move (e.g. moving back and forth A->B->A).
+                    # We punish this HEAVILY to force the agent to Pass instead of Loop.
+                    # Condition: Not passing AND potential gain is negligible.
+                    if potential_diff <= 0.001:
+                        loop_penalty = -0.005
+            
+            r += pass_penalty + step_penalty + loop_penalty
             
             rewards[i] = r
             
@@ -113,6 +126,8 @@ class PotentialBasedRewardFn(RewardFn):
                     'potential_prior': potential_prior,
                     'potential_diff': potential_diff,
                     'pass_penalty': pass_penalty,
+                    'step_penalty': step_penalty,
+                    'loop_penalty': loop_penalty,
                     'final_reward': r,
                     'agent_generals': agent_generals,
                     'prior_generals': prior_generals,
