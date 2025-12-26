@@ -1,7 +1,7 @@
 training:
   batch_size: 1024
   learning_rate: 0.0003
-  num_epochs: 30
+  num_epochs: 50
   steps_per_epoch: 1000
   gradient_clip: 1.0
   warmup_steps: 1000
@@ -24,7 +24,7 @@ data:
   data_dir: data/generals_io_replays
   grid_size: 24
   min_stars: 70
-  max_turns: 500
+  max_turns: 50000
   max_replays: 18803
   train_split: 0.95
 
@@ -45,7 +45,7 @@ scheduler:
   min_lr: 1.0e-6
 
 logging:
-  experiment_name: bc_new_mem
+  experiment_name: bc_new_mem_all_replays
   save_dir: experiments
   tensorboard: true
   use_wandb: true
