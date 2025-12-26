@@ -1,0 +1,51 @@
+data:
+  data_dir: data/generals_io_replays
+  grid_size: 24
+  max_replays: 18803
+  max_turns: 50000
+  min_stars: 70
+  train_split: 0.95
+logging:
+  experiment_name: bc_new_mem_all_replays
+  save_dir: experiments
+  tensorboard: true
+  use_wandb: true
+  wandb_entity: coc
+  wandb_project: generals-bc
+  wandb_tags:
+  - behavior_cloning
+  - base
+model:
+  base_channels: 64
+  grid_size: 24
+  memory_channels: 13
+  obs_channels: 15
+optimizer:
+  betas:
+  - 0.9
+  - 0.95
+  eps: 1.0e-08
+  type: adamw
+scheduler:
+  min_lr: 1.0e-06
+  type: cosine
+  warmup_epochs: 5
+seed: 42
+training:
+  batch_size: 1024
+  device: cuda
+  early_stopping:
+    enabled: true
+    min_delta: 0.0
+    patience: 10
+  eval_every: 1000
+  gradient_clip: 1.0
+  learning_rate: 0.0003
+  log_every: 100
+  mixed_precision: true
+  num_epochs: 50
+  num_workers: 4
+  save_top_k: 5
+  steps_per_epoch: 1000
+  warmup_steps: 1000
+  weight_decay: 0.0001

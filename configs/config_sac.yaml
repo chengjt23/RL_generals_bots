@@ -33,6 +33,7 @@ model:
   memory_channels: 13
   base_channels: 64
   grid_size: 24
+  pretrained_path: null # Path to pretrained .pt file
 
 optimizer:
   type: adamw

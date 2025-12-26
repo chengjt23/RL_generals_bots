@@ -153,6 +153,27 @@ class SACTrainer:
             base_channels=base_channels
         ).to(self.device)
         
+        # Load pretrained weights if provided
+        pretrained_path = model_config.get('pretrained_path')
+        if pretrained_path:
+            print(f"Loading pretrained model from {pretrained_path}")
+            ckpt = torch.load(pretrained_path, map_location=self.device)
+            
+            # Handle different checkpoint formats
+            if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
+                state_dict = ckpt['model_state_dict']
+            elif isinstance(ckpt, dict) and 'actor' in ckpt:
+                state_dict = ckpt['actor']
+            else:
+                state_dict = ckpt
+                
+            # Load state dict
+            try:
+                self.actor.load_state_dict(state_dict, strict=False)
+                print("Successfully loaded pretrained weights")
+            except Exception as e:
+                print(f"Error loading pretrained weights: {e}")
+        
         # Critics (Q1, Q2)
         self.q1 = QNetwork(obs_channels, memory_channels, self.grid_size, base_channels).to(self.device)
         self.q2 = QNetwork(obs_channels, memory_channels, self.grid_size, base_channels).to(self.device)
