@@ -262,8 +262,8 @@ class PPOAgent(Agent):
         
         with torch.no_grad():
             policy_logits_batch, values_batch = self.network(obs_batch, mem_batch)
-            if np.random.rand() < 0.05:
-                 print(f"[ACT] Logits Mean: {policy_logits_batch.mean().item():.4f}, Std: {policy_logits_batch.std().item():.4f}")
+            # if np.random.rand() < 0.05:
+            #      print(f"[ACT] Logits Mean: {policy_logits_batch.mean().item():.4f}, Std: {policy_logits_batch.std().item():.4f}")
 
         
         actions = []
