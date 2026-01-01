@@ -1,5 +1,10 @@
 # Generals.io RL Training Pipeline
 
+## 📖 文档导航
+
+- **[模型架构详细说明](MODEL_ARCHITECTURE.md)** - 完整的模型架构、输入输出规格和数据流说明（便于绘图）
+- 本文档 - 训练流程和使用指南
+
 ## 目录结构
 
 ```
