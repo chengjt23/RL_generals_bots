@@ -1,0 +1,40 @@
+seed: 43  # Different seed
+
+device: cuda
+
+env:
+  pad_observations_to: 24
+  truncation: 500
+  render_mode: null
+  reward_fn: frequent_asset
+  agents:
+    - player_0
+    - player_1
+
+model:
+  obs_channels: 15
+  memory_channels: 13
+  grid_size: 24
+  base_channels: 64
+  bc_checkpoint: /root/shared-nvme/oyx_new/RL_generals_bots/model/epoch_37_loss_1.7065.pt
+
+ppo:
+  rollout_length: 512       # Increased from 256 for more stable advantage estimates
+  total_env_steps: 1000000  # Increased from 200k to allow more training time
+  num_minibatches: 8        # Increased to match rollout length (512/8 = 64 batch size)
+  ppo_epochs: 10            # Increased from 4 to 10 to push KL higher (target ~0.01-0.03)
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  entropy_coef: 0.01
+  value_coef: 0.5
+  max_grad_norm: 0.5
+  learning_rate: 5.0e-4     # Increased from 3e-4 to learn faster
+
+logging:
+  use_swanlab: true
+  project: generals-ppo
+  experiment_name: ppo-aggressive-tuning
+  log_interval: 10
+  checkpoint_dir: checkpoints_ppo_aggressive
+  checkpoint_every: 20000
