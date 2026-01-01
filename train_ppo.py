@@ -39,6 +39,7 @@ class PPOHyperParams:
     value_coef: float
     max_grad_norm: float
     learning_rate: float
+    anneal_lr: bool = False
 
 
 def set_seed(seed: int) -> None:
@@ -277,6 +278,7 @@ class PPORunner:
             value_coef=ppo_cfg.get("value_coef", 0.5),
             max_grad_norm=ppo_cfg.get("max_grad_norm", 0.5),
             learning_rate=ppo_cfg.get("learning_rate", 3e-4),
+            anneal_lr=ppo_cfg.get("anneal_lr", False),
         )
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hyper.learning_rate)
@@ -655,6 +657,11 @@ class PPORunner:
         progress = tqdm(total=self.hyper.total_env_steps, desc="PPO Training", unit="step")
 
         while global_step < self.hyper.total_env_steps:
+            if self.hyper.anneal_lr:
+                frac = 1.0 - (global_step - 1.0) / self.hyper.total_env_steps
+                lrnow = self.hyper.learning_rate * frac
+                self.optimizer.param_groups[0]["lr"] = lrnow
+
             obs, infos, global_step = self.collect_rollout(obs, infos, global_step)
             
             last_values = self._compute_last_value(obs, infos)
