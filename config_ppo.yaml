@@ -35,6 +35,10 @@ ppo:
   num_workers: 8
   eval_vs_bc_ratio: 0.25
   warmup_games: 50
+  pool_size: 3
+  tournament_interval: 50000
+  tournament_threshold: 0.55
+  tournament_games: 40
 
 logging:
   use_swanlab: true

@@ -335,14 +335,56 @@ class PPORunner:
             print(f"BC model loaded for evaluation. {int(eval_vs_bc_ratio * 100)}% of workers will play against BC.")
         
         self.episode_wins_vs_bc = deque(maxlen=100)
+        self.episode_wins_vs_pool = deque(maxlen=100)
+        self.episode_ties_vs_bc = deque(maxlen=100)
         self.eval_vs_bc_ratio = eval_vs_bc_ratio
-        if self.bc_model is not None:
-            num_vs_bc = max(1, int(self.num_workers * eval_vs_bc_ratio))
-            self.worker_is_vs_bc = [(i < num_vs_bc) for i in range(self.num_workers)]
-        else:
-            self.worker_is_vs_bc = [False] * self.num_workers
         
         self.warmup_games = ppo_cfg.get("warmup_games", 50)
+        
+        self.pool_size = ppo_cfg.get("pool_size", 3)
+        self.tournament_interval = ppo_cfg.get("tournament_interval", 100000)
+        self.tournament_threshold = ppo_cfg.get("tournament_threshold", 0.55)
+        self.tournament_games = ppo_cfg.get("tournament_games", 40)
+        self.last_eval_step = 0
+        
+        self.opponent_pool_paths = []
+        self.opp_models = None
+        self.worker_tasks = None
+        self.worker_current_opp_idx = None
+        
+        if bc_path:
+            init_path = self.checkpoint_dir / "pool_init_bc.pt"
+            torch.save({"model_state_dict": self.model.state_dict()}, init_path)
+            self.opponent_pool_paths = [str(init_path)] * self.pool_size
+            
+            self.opp_models = torch.nn.ModuleList([
+                SOTANetwork(
+                    obs_channels=model_cfg.get("obs_channels", 15),
+                    memory_channels=model_cfg.get("memory_channels", MEMORY_CHANNELS),
+                    grid_size=model_cfg.get("grid_size", self.grid_size),
+                    base_channels=model_cfg.get("base_channels", 64),
+                ).to(self.device) for _ in range(self.pool_size)
+            ])
+            for opp_model in self.opp_models:
+                opp_model.eval()
+            
+            for i, opp_model in enumerate(self.opp_models):
+                opp_state = torch.load(self.opponent_pool_paths[i], map_location=self.device, weights_only=False)
+                if isinstance(opp_state, dict) and "model_state_dict" in opp_state:
+                    opp_state = opp_state["model_state_dict"]
+                opp_model.load_state_dict(opp_state, strict=False)
+            
+            print(f"Opponent pool initialized with {self.pool_size} BC models (loaded in memory).")
+            
+            num_self_play = max(1, int(self.num_workers * 0.5))
+            num_vs_pool = max(1, int(self.num_workers * 0.25))
+            num_vs_bc_base = self.num_workers - num_self_play - num_vs_pool
+            self.worker_tasks = [0] * num_self_play + [1] * num_vs_pool + [2] * num_vs_bc_base
+            self.worker_current_opp_idx = [random.randint(0, self.pool_size - 1) for _ in range(self.num_workers)]
+            print(f"Worker tasks: {num_self_play} self-play, {num_vs_pool} vs pool, {num_vs_bc_base} vs BC")
+        else:
+            self.worker_tasks = [0] * self.num_workers
+            self.worker_current_opp_idx = [0] * self.num_workers
 
     def _make_reward_fn(self, name: str):
         name = (name or "").lower()
@@ -414,14 +456,18 @@ class PPORunner:
             for mem in env_memories.values():
                 mem.reset()
 
-    def collect_rollout(self, start_obs: np.ndarray, start_infos: Tuple[Dict[str, Any]], global_step: int) -> Tuple[np.ndarray, Tuple[Dict[str, Any]], int]:
+    def collect_rollout(self, start_obs: np.ndarray, start_infos: Tuple[Dict[str, Any]], global_step: int, eval_mode: bool = False) -> Tuple[np.ndarray, Tuple[Dict[str, Any]], int, List[int]]:
         self.model.eval()
+        if self.opp_models is not None:
+            for opp_model in self.opp_models:
+                opp_model.eval()
         obs = start_obs
         infos = start_infos
         
         for buf in self.buffers:
             buf.clear()
 
+        finished_game_results = []
         steps_per_worker = self.hyper.rollout_length // self.num_workers
         
         for _ in range(steps_per_worker):
@@ -455,15 +501,25 @@ class PPORunner:
                 with torch.no_grad():
                     policy_logits, value = self.model(obs_t, mem_t)
                     
-                    if self.bc_model is not None and agent_name == self.agents[1]:
-                        bc_logits, _ = self.bc_model(obs_t, mem_t)
+                    if agent_name == self.agents[1] and self.worker_tasks is not None:
                         for w in range(self.num_workers):
-                            if self.worker_is_vs_bc[w]:
-                                policy_logits[w] = bc_logits[w]
+                            task = self.worker_tasks[w]
+                            if task == 1:
+                                if self.opp_models is not None and len(self.opp_models) > 0:
+                                    opp_idx = self.worker_current_opp_idx[w]
+                                    opp_logits, _ = self.opp_models[opp_idx](obs_t[w:w+1], mem_t[w:w+1])
+                                    policy_logits[w] = opp_logits[0]
+                            elif task == 2 and self.bc_model is not None:
+                                bc_logits, _ = self.bc_model(obs_t[w:w+1], mem_t[w:w+1])
+                                policy_logits[w] = bc_logits[0]
                     
                     dist = build_action_distribution(policy_logits, agent_masks_np, self.grid_size)
-                    action_idx = dist.sample()
-                    logprob = dist.log_prob(action_idx)
+                    if eval_mode:
+                        action_idx = torch.argmax(dist.probs, dim=-1)
+                        logprob = dist.log_prob(action_idx)
+                    else:
+                        action_idx = dist.sample()
+                        logprob = dist.log_prob(action_idx)
                 
                 # Store actions for step
                 for w in range(self.num_workers):
@@ -546,8 +602,24 @@ class PPORunner:
                         self.episode_ties.append(0)
                         self.episode_losses.append(1)
                     
-                    if self.worker_is_vs_bc[w]:
-                        self.episode_wins_vs_bc.append(1 if is_winner else 0)
+                    strict_win_score = 1.0 if is_winner else 0.0
+                    
+                    if self.worker_tasks is not None and self.worker_tasks[w] == 2:
+                        self.episode_wins_vs_bc.append(strict_win_score)
+                        self.episode_ties_vs_bc.append(1.0 if truncateds[w] else 0.0)
+                    
+                    if self.worker_tasks is not None and self.worker_tasks[w] == 1:
+                        self.episode_wins_vs_pool.append(strict_win_score)
+                    
+                    if (self.worker_tasks is not None and self.worker_tasks[w] == 1) or eval_mode:
+                        if eval_mode:
+                            tourney_score = 1.0 if is_winner else (0.5 if truncateds[w] else 0.0)
+                        else:
+                            tourney_score = strict_win_score
+                        finished_game_results.append(tourney_score)
+                    
+                    if self.worker_tasks is not None and self.worker_tasks[w] == 1 and self.opp_models is not None:
+                        self.worker_current_opp_idx[w] = random.randint(0, len(self.opp_models) - 1)
                     
                     if self.current_episode_length[w] > 0:
                         self.episode_reward_per_step.append(self.current_episode_return[w] / self.current_episode_length[w])
@@ -567,7 +639,59 @@ class PPORunner:
             infos = next_infos
             global_step += self.num_workers
             
-        return obs, infos, global_step
+        return obs, infos, global_step, finished_game_results
+
+    def run_tournament(self, global_step: int) -> bool:
+        """运行锦标赛评估：当前模型 vs 对手池"""
+        print("run_tournament")
+        if len(self.opponent_pool_paths) == 0:
+            return False
+        
+        print(f"\n[Tournament] Testing candidate at step {global_step}...")
+        
+        old_tasks = self.worker_tasks.copy()
+        self.worker_tasks = [1] * self.num_workers
+        
+        tourney_results = []
+        obs, infos = self.env.reset()
+        self._reset_memories()
+
+        pbar = tqdm(total=self.tournament_games, desc="Tournament Games", unit="game")
+        while len(tourney_results) < self.tournament_games:
+            obs, infos, _, step_results = self.collect_rollout(obs, infos, 0, eval_mode=True)
+            tourney_results.extend(step_results)
+            pbar.update(len(step_results))
+        pbar.close()
+
+        avg_win_rate = np.mean(tourney_results[:self.tournament_games]) if len(tourney_results) > 0 else 0.0
+        print(f"[Tournament] Candidate win-rate: {avg_win_rate:.2%}")
+
+        self.worker_tasks = old_tasks
+        obs, infos = self.env.reset()
+        self._reset_memories()
+        
+        for buf in self.buffers:
+            buf.clear()
+
+        if avg_win_rate >= self.tournament_threshold:
+            print(f">>> SUCCESS! Candidate ({avg_win_rate:.2%}) replaces the oldest pool model.")
+            new_ckpt_path = self.checkpoint_dir / f"pool_v_{global_step}.pt"
+            torch.save({"model_state_dict": self.model.state_dict()}, new_ckpt_path)
+            
+            self.opponent_pool_paths.pop(0)
+            self.opponent_pool_paths.append(str(new_ckpt_path))
+            
+            for i in range(self.pool_size):
+                state = torch.load(self.opponent_pool_paths[i], map_location=self.device, weights_only=False)
+                if isinstance(state, dict) and "model_state_dict" in state:
+                    state = state["model_state_dict"]
+                self.opp_models[i].load_state_dict(state, strict=False)
+            
+            print(f"Pool updated. Current pool size: {len(self.opponent_pool_paths)}")
+            return True
+        else:
+            print(f">>> FAILED. Win rate {avg_win_rate:.2%} < threshold {self.tournament_threshold:.2%}")
+            return False
 
     def _compute_last_value(self, obs: np.ndarray, infos: Tuple[Dict[str, Any]]) -> torch.Tensor:
         self.model.eval()
@@ -694,14 +818,15 @@ class PPORunner:
         if self.bc_model is not None and self.warmup_games > 0:
             print(f"Starting warmup: Collecting {self.warmup_games} games vs BC baseline...")
             
-            original_worker_is_vs_bc = self.worker_is_vs_bc.copy()
-            self.worker_is_vs_bc = [True] * self.num_workers
+            original_worker_tasks = self.worker_tasks.copy() if self.worker_tasks is not None else None
+            
+            self.worker_tasks = [2] * self.num_workers
             
             warmup_pbar = tqdm(total=self.warmup_games, desc="Warmup (PPO vs BC)", unit="game")
             last_completed_games = 0
             
             while len(self.episode_wins_vs_bc) < self.warmup_games:
-                obs, infos, _ = self.collect_rollout(obs, infos, 0)
+                obs, infos, _, _ = self.collect_rollout(obs, infos, 0)
                 
                 current_completed = len(self.episode_wins_vs_bc)
                 warmup_pbar.update(current_completed - last_completed_games)
@@ -721,7 +846,8 @@ class PPORunner:
             
             print(f"Warmup finished. Initial Win Rate vs BC: {initial_wr:.4f}")
             
-            self.worker_is_vs_bc = original_worker_is_vs_bc
+            if original_worker_tasks is not None:
+                self.worker_tasks = original_worker_tasks
             for buf in self.buffers:
                 buf.clear()
             
@@ -736,7 +862,7 @@ class PPORunner:
                 lrnow = self.hyper.learning_rate * frac
                 self.optimizer.param_groups[0]["lr"] = lrnow
 
-            obs, infos, global_step = self.collect_rollout(obs, infos, global_step)
+            obs, infos, global_step, _ = self.collect_rollout(obs, infos, global_step)
             
             last_values = self._compute_last_value(obs, infos)
             
@@ -778,8 +904,18 @@ class PPORunner:
             episodic_loss_rate = np.mean(self.episode_losses) if len(self.episode_losses) > 0 else 0.0
             episodic_reward_per_step_mean = np.mean(self.episode_reward_per_step) if len(self.episode_reward_per_step) > 0 else 0.0
             episodic_win_rate_vs_bc = np.mean(self.episode_wins_vs_bc) if len(self.episode_wins_vs_bc) > 0 else 0.0
+            episodic_win_rate_vs_pool = np.mean(self.episode_wins_vs_pool) if len(self.episode_wins_vs_pool) > 0 else 0.0
 
             metrics = self.update(merged_batch, flat_advantages, flat_returns)
+
+            if global_step > 0 and (global_step - self.last_eval_step) >= self.tournament_interval and self.opp_models is not None:
+                pool_updated = self.run_tournament(global_step)
+                self.last_eval_step = global_step
+                if self.use_swanlab:
+                    swanlab.log({
+                        "train/pool_updated": 1 if pool_updated else 0,
+                        "train/step": global_step,
+                    })
 
             if self.use_swanlab:
                 log_dict = {
@@ -801,6 +937,9 @@ class PPORunner:
                 }
                 if self.bc_model is not None:
                     log_dict["train/win_rate_to_bc"] = episodic_win_rate_vs_bc
+                    log_dict["train/tie_rate_to_bc"] = np.mean(self.episode_ties_vs_bc) if self.episode_ties_vs_bc else 0.0
+                if self.opp_models is not None:
+                    log_dict["train/win_rate_pool"] = episodic_win_rate_vs_pool
                 swanlab.log(log_dict)
 
             if global_step % self.checkpoint_every == 0:
