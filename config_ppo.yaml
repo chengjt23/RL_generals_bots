@@ -4,7 +4,7 @@ device: cuda
 
 env:
   pad_observations_to: 24
-  truncation: 500
+  truncation: 1024
   render_mode: null
   reward_fn: frequent_asset  # options: frequent_asset, land, winlose
   agents:

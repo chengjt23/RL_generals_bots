@@ -220,7 +220,85 @@ from collections import deque
 
 class PPORunner:
     def __init__(self, config_path: str) -> None:
-        # ... existing init ...
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        self.seed = cfg.get("seed", 42)
+        set_seed(self.seed)
+
+        self.device = torch.device(cfg.get("device", "cpu"))
+        env_cfg = cfg.get("env", {})
+        model_cfg = cfg.get("model", {})
+        ppo_cfg = cfg.get("ppo", {})
+        log_cfg = cfg.get("logging", {})
+
+        self.agents: List[str] = env_cfg.get("agents", ["player_0", "player_1"])
+        self.grid_size: int = env_cfg.get("pad_observations_to", 24)
+        self.truncation: int | None = env_cfg.get("truncation")
+
+        reward_fn = self._make_reward_fn(env_cfg.get("reward_fn", "frequent_asset"))
+
+        self.num_workers = ppo_cfg.get("num_workers", 1)
+        
+        def make_env():
+            return GymnasiumGenerals(
+                agents=self.agents,
+                pad_observations_to=self.grid_size,
+                truncation=self.truncation,
+                reward_fn=reward_fn,
+                render_mode=env_cfg.get("render_mode"),
+            )
+
+        if self.num_workers > 1:
+            self.env = gym.vector.AsyncVectorEnv([make_env for _ in range(self.num_workers)])
+        else:
+            self.env = gym.vector.SyncVectorEnv([make_env])
+
+        self.model = SOTANetwork(
+            obs_channels=model_cfg.get("obs_channels", 15),
+            memory_channels=model_cfg.get("memory_channels", MEMORY_CHANNELS),
+            grid_size=model_cfg.get("grid_size", self.grid_size),
+            base_channels=model_cfg.get("base_channels", 64),
+        ).to(self.device)
+
+        bc_path = model_cfg.get("bc_checkpoint")
+        if bc_path:
+            self._load_checkpoint_weights(bc_path)
+
+        self.hyper = PPOHyperParams(
+            rollout_length=ppo_cfg.get("rollout_length", 256),
+            total_env_steps=ppo_cfg.get("total_env_steps", 200000),
+            num_minibatches=ppo_cfg.get("num_minibatches", 4),
+            ppo_epochs=ppo_cfg.get("ppo_epochs", 4),
+            gamma=ppo_cfg.get("gamma", 0.99),
+            gae_lambda=ppo_cfg.get("gae_lambda", 0.95),
+            clip_range=ppo_cfg.get("clip_range", 0.2),
+            entropy_coef=ppo_cfg.get("entropy_coef", 0.01),
+            value_coef=ppo_cfg.get("value_coef", 0.5),
+            max_grad_norm=ppo_cfg.get("max_grad_norm", 0.5),
+            learning_rate=ppo_cfg.get("learning_rate", 3e-4),
+        )
+
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hyper.learning_rate)
+        self.buffers = [RolloutBuffer() for _ in range(self.num_workers)]
+
+        self.checkpoint_dir = Path(log_cfg.get("checkpoint_dir", "checkpoints_ppo"))
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_every = log_cfg.get("checkpoint_every", 10000)
+
+        self.use_swanlab = bool(log_cfg.get("use_swanlab", False)) and swanlab is not None
+        if self.use_swanlab:
+            swanlab.init(
+                project=log_cfg.get("project", "generals-ppo"),
+                experiment_name=log_cfg.get("experiment_name", "ppo-bc"),
+                config=cfg,
+            )
+        elif log_cfg.get("use_swanlab", False):
+            print("Warning: swanlab requested but not installed; proceeding without it.")
+
+        self.log_interval = log_cfg.get("log_interval", 10)
+        self.reward_scale = ppo_cfg.get("reward_scale", 0.001) # Scale rewards to avoid exploding value gradients
+
         self.memories: List[Dict[str, MemoryAugmentation]] = []
         for _ in range(self.num_workers):
             self.memories.append({
@@ -230,6 +308,10 @@ class PPORunner:
         # Episode tracking
         self.episode_returns = deque(maxlen=100)
         self.episode_lengths = deque(maxlen=100)
+        self.episode_wins = deque(maxlen=100)
+        self.episode_ties = deque(maxlen=100)
+        self.episode_losses = deque(maxlen=100)
+        self.episode_reward_per_step = deque(maxlen=100)
         self.current_episode_return = np.zeros(self.num_workers, dtype=np.float32)
         self.current_episode_length = np.zeros(self.num_workers, dtype=np.int32)
 
@@ -333,10 +415,9 @@ class PPORunner:
                     agent_memories_np.append(self.memories[w][agent_name].get_memory_features())
                 agent_memories_np = np.stack(agent_memories_np) # (B, C_mem, H, W)
                 
-                agent_masks_np = []
-                for w in range(self.num_workers):
-                    agent_masks_np.append(infos[w][agent_name]["masks"])
-                agent_masks_np = np.stack(agent_masks_np) # (B, H, W, 4)
+                # Fix: Access batched infos correctly
+                # infos is {agent: {key: batched_array}}
+                agent_masks_np = infos[agent_name]["masks"] # (B, H, W, 4)
                 
                 # Inference
                 obs_t = torch.from_numpy(agent_obs_np).float().to(self.device)
@@ -370,10 +451,32 @@ class PPORunner:
             
             # Process results and store in buffers
             for w in range(self.num_workers):
-                # Reward for player_0
-                raw_reward = float(next_infos[w][self.agents[0]]["reward"])
+                # Handle done state and extract correct info
+                is_done = terminateds[w] or truncateds[w]
+                
+                # Default values from current step (valid if not done, or if done but no final_info captured yet)
+                raw_reward = float(next_infos[self.agents[0]]["reward"][w])
+                done_val = bool(next_infos[self.agents[0]]["done"][w])
+                is_winner = bool(next_infos[self.agents[0]]["winner"][w])
+
+                if is_done and "final_info" in next_infos:
+                    # Extract from final_info for the done step
+                    info_w = next_infos["final_info"][w]
+                    if info_w is not None:
+                        raw_reward = float(info_w[self.agents[0]]["reward"])
+                        done_val = bool(info_w[self.agents[0]]["done"])
+                        is_winner = bool(info_w[self.agents[0]]["winner"])
+
+                # Explicit Win/Loss Reward
+                # This dominates other rewards to ensure winning is the priority
+                if done_val:
+                    if is_winner:
+                        raw_reward += 20000
+                    else:
+                        raw_reward -= 20000
+
                 reward = raw_reward * self.reward_scale
-                done_flag = bool(terminateds[w] or truncateds[w] or next_infos[w][self.agents[0]]["done"])
+                done_flag = bool(is_done or done_val)
                 
                 self.current_episode_return[w] += raw_reward
                 self.current_episode_length[w] += 1
@@ -393,6 +496,23 @@ class PPORunner:
                 if done_flag:
                     self.episode_returns.append(self.current_episode_return[w])
                     self.episode_lengths.append(self.current_episode_length[w])
+                    
+                    if is_winner:
+                        self.episode_wins.append(1)
+                        self.episode_ties.append(0)
+                        self.episode_losses.append(0)
+                    elif truncateds[w]:
+                        self.episode_wins.append(0)
+                        self.episode_ties.append(1)
+                        self.episode_losses.append(0)
+                    else:
+                        self.episode_wins.append(0)
+                        self.episode_ties.append(0)
+                        self.episode_losses.append(1)
+                    
+                    if self.current_episode_length[w] > 0:
+                        self.episode_reward_per_step.append(self.current_episode_return[w] / self.current_episode_length[w])
+                    
                     self.current_episode_return[w] = 0
                     self.current_episode_length[w] = 0
                     
@@ -400,6 +520,7 @@ class PPORunner:
                         mem.reset()
                 else:
                     for agent_idx, agent_name in enumerate(self.agents):
+                        # next_obs is already the new observation (batched)
                         obs_dict = obs_tensor_to_dict(next_obs[w, agent_idx])
                         self.memories[w][agent_name].update(obs_dict, worker_actions[w][agent_idx])
             
@@ -571,6 +692,10 @@ class PPORunner:
             
             episodic_return_mean = np.mean(self.episode_returns) if len(self.episode_returns) > 0 else 0.0
             episodic_length_mean = np.mean(self.episode_lengths) if len(self.episode_lengths) > 0 else 0.0
+            episodic_win_rate = np.mean(self.episode_wins) if len(self.episode_wins) > 0 else 0.0
+            episodic_tie_rate = np.mean(self.episode_ties) if len(self.episode_ties) > 0 else 0.0
+            episodic_loss_rate = np.mean(self.episode_losses) if len(self.episode_losses) > 0 else 0.0
+            episodic_reward_per_step_mean = np.mean(self.episode_reward_per_step) if len(self.episode_reward_per_step) > 0 else 0.0
 
             metrics = self.update(merged_batch, flat_advantages, flat_returns)
 
@@ -586,6 +711,10 @@ class PPORunner:
                     "train/raw_reward_mean": raw_reward,
                     "train/episodic_return_mean": episodic_return_mean,
                     "train/episodic_length_mean": episodic_length_mean,
+                    "train/episodic_win_rate": episodic_win_rate,
+                    "train/episodic_tie_rate": episodic_tie_rate,
+                    "train/episodic_loss_rate": episodic_loss_rate,
+                    "train/episodic_reward_per_step_mean": episodic_reward_per_step_mean,
                     "train/step": global_step,
                 })
 
