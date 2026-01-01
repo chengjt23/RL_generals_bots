@@ -1,3 +1,8 @@
 __pycache__/
 swanlog/
 *.pt
+model/*.pt
+wandb/
+running/
+*.mp4
+*.gif
