@@ -35,6 +35,7 @@ ppo:
   target_kl: 0.03
   reward_scale: 0.001
   num_workers: 8
+  value_warmup_steps: 10000
   
   # Collapse Detection
   collapse_win_rate_drop: 0.06
@@ -45,7 +46,7 @@ ppo:
 
 logging:
   use_swanlab: true
-  project: generals-ppo
+  project: generals-ppo-protected
   experiment_name: ppo-new
   log_interval: 10
   checkpoint_dir: checkpoints_ppo

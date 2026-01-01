@@ -42,6 +42,7 @@ class PPOHyperParams:
     anneal_lr: bool = False
     adaptive_lr: bool = False
     target_kl: float | None = None
+    value_warmup_steps: int = 0
     
     # Collapse Detection
     collapse_win_rate_drop: float = 0.06
@@ -291,6 +292,7 @@ class PPORunner:
             anneal_lr=ppo_cfg.get("anneal_lr", False),
             adaptive_lr=ppo_cfg.get("adaptive_lr", False),
             target_kl=ppo_cfg.get("target_kl", None),
+            value_warmup_steps=ppo_cfg.get("value_warmup_steps", 0),
             collapse_win_rate_drop=ppo_cfg.get("collapse_win_rate_drop", 0.06),
             collapse_tie_rate_threshold=ppo_cfg.get("collapse_tie_rate_threshold", 0.40),
             min_win_rate_for_detection=ppo_cfg.get("min_win_rate_for_detection", 0.10),
@@ -574,7 +576,7 @@ class PPORunner:
             policy_logits, value = self.model(obs_t, mem_t)
         return value.detach().squeeze(-1)
 
-    def update(self, batch: Dict[str, torch.Tensor], advantages: torch.Tensor, returns: torch.Tensor) -> Dict[str, float]:
+    def update(self, batch: Dict[str, torch.Tensor], advantages: torch.Tensor, returns: torch.Tensor, warmup: bool = False) -> Dict[str, float]:
         # Keep model in eval mode to ensure consistency with rollout (BatchNorm/Dropout)
         self.model.eval()
         batch_size = batch["obs"].shape[0]
@@ -582,6 +584,18 @@ class PPORunner:
 
         metrics = {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0, "clip_rate": 0.0, "ratio_mean": 0.0}
         idxs = np.arange(batch_size)
+        
+        # If warmup, freeze backbone and policy head
+        if warmup:
+            for param in self.model.backbone.parameters():
+                param.requires_grad = False
+            for param in self.model.policy_head.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.model.backbone.parameters():
+                param.requires_grad = True
+            for param in self.model.policy_head.parameters():
+                param.requires_grad = True
 
         for _ in range(self.hyper.ppo_epochs):
             np.random.shuffle(idxs)
@@ -642,7 +656,10 @@ class PPORunner:
                 v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
                 value_loss = 0.5 * v_loss_max.mean()
 
-                loss = policy_loss + self.hyper.value_coef * value_loss - self.hyper.entropy_coef * entropy
+                if warmup:
+                    loss = self.hyper.value_coef * value_loss
+                else:
+                    loss = policy_loss + self.hyper.value_coef * value_loss - self.hyper.entropy_coef * entropy
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -752,11 +769,19 @@ class PPORunner:
             
             # Calculate pass rate
             pass_rate = (merged_batch["actions"] == 0).float().mean().item()
+            
+            # Determine if we are in warmup phase
+            is_warmup = global_step < self.hyper.value_warmup_steps
+            if is_warmup:
+                # During warmup, we only train value head.
+                # We don't want adaptive LR to mess with LR based on policy KL (which is 0 or meaningless)
+                # So we skip adaptive LR logic or handle it differently.
+                pass
 
-            metrics = self.update(merged_batch, flat_advantages, flat_returns)
+            metrics = self.update(merged_batch, flat_advantages, flat_returns, warmup=is_warmup)
 
             # Adaptive Learning Rate
-            if self.hyper.adaptive_lr and self.hyper.target_kl is not None:
+            if not is_warmup and self.hyper.adaptive_lr and self.hyper.target_kl is not None:
                 current_lr = self.optimizer.param_groups[0]["lr"]
                 
                 # If recovering, only allow LR decrease, not increase
@@ -774,7 +799,7 @@ class PPORunner:
                 self.optimizer.param_groups[0]["lr"] = current_lr
 
             if self.use_swanlab:
-                swanlab.log({
+                log_dict = {
                     "train/policy_loss": metrics["policy_loss"],
                     "train/value_loss": metrics["value_loss"],
                     "train/entropy": metrics["entropy"],
@@ -792,7 +817,9 @@ class PPORunner:
                     "train/episodic_reward_per_step_mean": episodic_reward_per_step_mean,
                     "train/learning_rate": self.optimizer.param_groups[0]["lr"],
                     "train/step": global_step,
-                })
+                    "train/is_warmup": float(is_warmup),
+                }
+                swanlab.log(log_dict)
 
             # Save Best Model
             if len(self.episode_wins) >= self.hyper.min_episodes_for_detection: # Wait for some stats
