@@ -35,7 +35,7 @@ ppo:
   target_kl: 0.03
   reward_scale: 0.001
   num_workers: 8
-  value_warmup_steps: 10000
+  value_warmup_steps: 12288
   
   # Collapse Detection
   collapse_win_rate_drop: 0.06
