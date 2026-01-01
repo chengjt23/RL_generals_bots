@@ -462,12 +462,12 @@ memory.update(obs, action, opponent_action)
 
 - U-Net: Ronneberger et al., 2015
 - PPO: Schulman et al., 2017
-- GAE: Schulman et al., 2018
+- GAE: Schulman et al., 2016
 - 势函数奖励整形: Ng et al., 1999
 - 本项目参考论文: Perolat et al., 2022
 
 ---
 
 **文档版本**: 1.0  
-**最后更新**: 2026-01-01  
+**创建日期**: 2026-01-01  
 **维护者**: RL_generals_bots 团队
