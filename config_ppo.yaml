@@ -29,9 +29,19 @@ ppo:
   entropy_coef: 0.001
   value_coef: 0.5
   max_grad_norm: 0.5
-  learning_rate: 5.0e-5
+  learning_rate: 2.5e-5
+  anneal_lr: false
+  adaptive_lr: true
+  target_kl: 0.03
   reward_scale: 0.001
   num_workers: 8
+  
+  # Collapse Detection
+  collapse_win_rate_drop: 0.06
+  collapse_tie_rate_threshold: 0.40
+  min_win_rate_for_detection: 0.10
+  min_episodes_for_detection: 50
+  recovery_cooldown: 50
 
 logging:
   use_swanlab: true

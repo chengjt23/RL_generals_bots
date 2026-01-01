@@ -39,6 +39,16 @@ class PPOHyperParams:
     value_coef: float
     max_grad_norm: float
     learning_rate: float
+    anneal_lr: bool = False
+    adaptive_lr: bool = False
+    target_kl: float | None = None
+    
+    # Collapse Detection
+    collapse_win_rate_drop: float = 0.06
+    collapse_tie_rate_threshold: float = 0.40
+    min_win_rate_for_detection: float = 0.10
+    min_episodes_for_detection: int = 50
+    recovery_cooldown: int = 50
 
 
 def set_seed(seed: int) -> None:
@@ -193,14 +203,15 @@ class FixedFrequentAssetRewardFn(FrequentAssetRewardFn):
         # FIX: Check if action is pass
         if prior_action.is_pass():
             is_valid = True
-            # Discourage passing after the starting phase (e.g., 50 steps)
-            if obs.timestep > 50:
-                valid_action_reward = -2
+            # Discourage passing after the starting phase (e.g., 20 steps)
+            # We want to force the agent to be active.
+            if obs.timestep > 20:
+                valid_action_reward = -5 # Strong penalty for passing later
             else:
-                valid_action_reward = 1
+                valid_action_reward = -0.05 # Small penalty for time passing
         else:
             is_valid = is_action_valid(prior_action, prior_obs)
-            valid_action_reward = 1 if is_valid else -5
+            valid_action_reward = -0.05 if is_valid else -5 # Small penalty for time passing
 
         reward = (
             valid_action_reward
@@ -277,6 +288,14 @@ class PPORunner:
             value_coef=ppo_cfg.get("value_coef", 0.5),
             max_grad_norm=ppo_cfg.get("max_grad_norm", 0.5),
             learning_rate=ppo_cfg.get("learning_rate", 3e-4),
+            anneal_lr=ppo_cfg.get("anneal_lr", False),
+            adaptive_lr=ppo_cfg.get("adaptive_lr", False),
+            target_kl=ppo_cfg.get("target_kl", None),
+            collapse_win_rate_drop=ppo_cfg.get("collapse_win_rate_drop", 0.06),
+            collapse_tie_rate_threshold=ppo_cfg.get("collapse_tie_rate_threshold", 0.40),
+            min_win_rate_for_detection=ppo_cfg.get("min_win_rate_for_detection", 0.10),
+            min_episodes_for_detection=ppo_cfg.get("min_episodes_for_detection", 50),
+            recovery_cooldown=ppo_cfg.get("recovery_cooldown", 50),
         )
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hyper.learning_rate)
@@ -314,6 +333,8 @@ class PPORunner:
         self.episode_reward_per_step = deque(maxlen=100)
         self.current_episode_return = np.zeros(self.num_workers, dtype=np.float32)
         self.current_episode_length = np.zeros(self.num_workers, dtype=np.int32)
+        
+        self.recovery_cooldown = 0 # Steps to wait before allowing LR increase after recovery
 
     def _make_reward_fn(self, name: str):
         name = (name or "").lower()
@@ -474,6 +495,10 @@ class PPORunner:
                         raw_reward += 20000
                     else:
                         raw_reward -= 20000
+                elif truncateds[w]:
+                    # Penalty for truncation (tie) to force agent to try to win
+                    # Not as bad as losing (-20000), but bad enough to discourage stalling
+                    raw_reward -= 5000
 
                 reward = raw_reward * self.reward_scale
                 done_flag = bool(is_done or done_val)
@@ -637,24 +662,52 @@ class PPORunner:
                 metrics["clip_rate"] += clip_rate
                 metrics["ratio_mean"] += ratio_mean
 
+                if self.hyper.target_kl is not None and approx_kl > self.hyper.target_kl * 1.5:
+                    break
+            else:
+                continue
+            break
+
         num_updates = self.hyper.ppo_epochs * self.hyper.num_minibatches
         for k in metrics:
             metrics[k] /= num_updates
         return metrics
 
-    def save_checkpoint(self, step: int) -> None:
-        ckpt_path = self.checkpoint_dir / f"ppo_step_{step}.pt"
+    def save_checkpoint(self, step: int, is_best: bool = False) -> None:
+        if is_best:
+            ckpt_path = self.checkpoint_dir / "best_model.pt"
+        else:
+            ckpt_path = self.checkpoint_dir / f"ppo_step_{step}.pt"
         torch.save({"step": step, "model_state_dict": self.model.state_dict()}, ckpt_path)
         print(f"Saved checkpoint to {ckpt_path}")
+
+    def load_best_checkpoint(self) -> int:
+        ckpt_path = self.checkpoint_dir / "best_model.pt"
+        if not ckpt_path.exists():
+            print("No best model found to rollback to.")
+            return 0
+        
+        print(f"Rolling back to best model: {ckpt_path}")
+        state = torch.load(ckpt_path, map_location=self.device)
+        self.model.load_state_dict(state["model_state_dict"])
+        return state["step"]
 
     def train(self) -> None:
         obs, infos = self.env.reset()
         global_step = 0
         self._reset_memories()
+        
+        best_win_rate = -1.0
+        steps_since_best = 0
 
         progress = tqdm(total=self.hyper.total_env_steps, desc="PPO Training", unit="step")
 
         while global_step < self.hyper.total_env_steps:
+            if self.hyper.anneal_lr:
+                frac = 1.0 - (global_step / self.hyper.total_env_steps)
+                lrnow = self.hyper.learning_rate * frac
+                self.optimizer.param_groups[0]["lr"] = lrnow
+
             obs, infos, global_step = self.collect_rollout(obs, infos, global_step)
             
             last_values = self._compute_last_value(obs, infos)
@@ -696,8 +749,29 @@ class PPORunner:
             episodic_tie_rate = np.mean(self.episode_ties) if len(self.episode_ties) > 0 else 0.0
             episodic_loss_rate = np.mean(self.episode_losses) if len(self.episode_losses) > 0 else 0.0
             episodic_reward_per_step_mean = np.mean(self.episode_reward_per_step) if len(self.episode_reward_per_step) > 0 else 0.0
+            
+            # Calculate pass rate
+            pass_rate = (merged_batch["actions"] == 0).float().mean().item()
 
             metrics = self.update(merged_batch, flat_advantages, flat_returns)
+
+            # Adaptive Learning Rate
+            if self.hyper.adaptive_lr and self.hyper.target_kl is not None:
+                current_lr = self.optimizer.param_groups[0]["lr"]
+                
+                # If recovering, only allow LR decrease, not increase
+                if self.recovery_cooldown > 0:
+                    self.recovery_cooldown -= 1
+                    if metrics["approx_kl"] > self.hyper.target_kl * 2.0:
+                        current_lr = max(1e-6, current_lr / 1.5)
+                    # No increase allowed
+                else:
+                    if metrics["approx_kl"] > self.hyper.target_kl * 2.0:
+                        current_lr = max(1e-6, current_lr / 1.5)
+                    elif metrics["approx_kl"] < self.hyper.target_kl / 2.0:
+                        current_lr = min(1e-3, current_lr * 1.5)
+                
+                self.optimizer.param_groups[0]["lr"] = current_lr
 
             if self.use_swanlab:
                 swanlab.log({
@@ -709,14 +783,69 @@ class PPORunner:
                     "train/ratio_mean": metrics["ratio_mean"],
                     "train/reward_mean": avg_reward,
                     "train/raw_reward_mean": raw_reward,
+                    "train/pass_rate": pass_rate,
                     "train/episodic_return_mean": episodic_return_mean,
                     "train/episodic_length_mean": episodic_length_mean,
                     "train/episodic_win_rate": episodic_win_rate,
                     "train/episodic_tie_rate": episodic_tie_rate,
                     "train/episodic_loss_rate": episodic_loss_rate,
                     "train/episodic_reward_per_step_mean": episodic_reward_per_step_mean,
+                    "train/learning_rate": self.optimizer.param_groups[0]["lr"],
                     "train/step": global_step,
                 })
+
+            # Save Best Model
+            if len(self.episode_wins) >= self.hyper.min_episodes_for_detection: # Wait for some stats
+                if episodic_win_rate > best_win_rate:
+                    best_win_rate = episodic_win_rate
+                    self.save_checkpoint(global_step, is_best=True)
+                    steps_since_best = 0
+                else:
+                    steps_since_best += self.hyper.rollout_length
+
+            # Collapse Detection & Recovery
+            # Condition: Win rate dropped significantly AND we had a decent win rate before
+            # OR Tie rate is extremely high (stalling)
+            is_collapse = False
+            if best_win_rate > self.hyper.min_win_rate_for_detection and len(self.episode_wins) >= self.hyper.min_episodes_for_detection:
+                # User requested sensitive detection: > 10% absolute drop is alarming
+                if episodic_win_rate < best_win_rate - self.hyper.collapse_win_rate_drop:
+                    print(f"Collapse Detected: Win rate dropped from {best_win_rate:.2f} to {episodic_win_rate:.2f}")
+                    is_collapse = True
+                # User requested sensitive tie detection: > 40% is alarming
+                elif episodic_tie_rate > self.hyper.collapse_tie_rate_threshold:
+                    print(f"Collapse Detected: Tie rate {episodic_tie_rate:.2f} is too high")
+                    is_collapse = True
+            
+            if is_collapse:
+                print("Initiating Recovery...")
+                # Load best model
+                step_loaded = self.load_best_checkpoint()
+                if step_loaded > 0:
+                    # Reduce LR
+                    current_lr = self.optimizer.param_groups[0]["lr"]
+                    new_lr = current_lr * 0.5
+                    self.optimizer.param_groups[0]["lr"] = new_lr
+                    print(f"Reduced Learning Rate to {new_lr}")
+                    
+                    # Set cooldown to prevent adaptive LR from increasing it immediately
+                    self.recovery_cooldown = self.hyper.recovery_cooldown
+                    
+                    # Reset buffers/stats
+                    self._reset_memories()
+                    self.episode_returns.clear()
+                    self.episode_lengths.clear()
+                    self.episode_wins.clear()
+                    self.episode_ties.clear()
+                    self.episode_losses.clear()
+                    self.episode_reward_per_step.clear()
+                    
+                    # Reset environment to clear bad states
+                    obs, infos = self.env.reset()
+                    
+                    # Note: We do NOT reset global_step, we continue counting
+                else:
+                    print("Recovery failed: No best model found.")
 
             if global_step % self.checkpoint_every == 0:
                 self.save_checkpoint(global_step)
