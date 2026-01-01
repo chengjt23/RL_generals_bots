@@ -139,7 +139,22 @@ class GymnasiumGenerals(gym.Env):
 
         return observations, infos
 
-    def step(self, actions: list[Action]) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+    def step(self, actions: list[Action] | np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        if isinstance(actions, np.ndarray):
+            # Convert numpy array to list of Action objects
+            # Expected shape: (num_agents, 5) -> [to_pass, row, col, direction, split]
+            action_objs = []
+            for i in range(len(self.agents)):
+                vals = actions[i]
+                action_objs.append(Action(
+                    to_pass=int(vals[0]),
+                    row=int(vals[1]),
+                    col=int(vals[2]),
+                    direction=int(vals[3]),
+                    to_split=bool(vals[4])
+                ))
+            actions = action_objs
+
         action_dict = {self.agents[i]: action for i, action in enumerate(actions)}
 
         observations, infos = self.game.step(action_dict)

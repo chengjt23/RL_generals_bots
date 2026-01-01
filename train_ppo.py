@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import yaml
+import gymnasium as gym
 from torch.distributions import Categorical
 from tqdm import tqdm
 
@@ -17,7 +18,8 @@ except ImportError:  # Swanlab is optional; we fall back to stdout logging
     swanlab = None
 
 from generals.core.action import Action
-from generals.core.rewards import FrequentAssetRewardFn, LandRewardFn, WinLoseRewardFn
+from generals.core.rewards import FrequentAssetRewardFn, LandRewardFn, WinLoseRewardFn, is_action_valid, compute_num_cities_owned, compute_num_generals_owned
+from generals.core.observation import Observation
 
 from env.gymnasium_generals import GymnasiumGenerals
 from model.memory import MemoryAugmentation
@@ -81,11 +83,16 @@ def build_action_distribution(
     move_logits = policy_logits[:, 1:9]  # (B, 8, H, W)
     move_logits = move_logits.permute(0, 2, 3, 1).reshape(batch_size, grid * grid, 8)
 
-    # valid_mask: (H, W, 4) -> flatten and repeat for split dimension
-    valid_dirs = torch.from_numpy(valid_mask).to(device=device, dtype=torch.bool).reshape(grid * grid, 4)
-    valid_moves = valid_dirs.repeat_interleave(2, dim=1)  # (cells, 8)
+    # valid_mask: (B, H, W, 4) or (H, W, 4)
+    valid_dirs = torch.from_numpy(valid_mask).to(device=device, dtype=torch.bool)
+    
+    if valid_dirs.dim() == 3: # (H, W, 4) -> unbatched
+        valid_dirs = valid_dirs.unsqueeze(0).expand(batch_size, -1, -1, -1)
+    
+    valid_dirs = valid_dirs.reshape(batch_size, grid * grid, 4)
+    valid_moves = valid_dirs.repeat_interleave(2, dim=2)  # (B, cells, 8)
 
-    masked_logits = move_logits.masked_fill(~valid_moves.unsqueeze(0), float("-inf"))
+    masked_logits = move_logits.masked_fill(~valid_moves, float("-inf"))
     flat_logits = torch.cat([pass_logits.unsqueeze(1), masked_logits.view(batch_size, -1)], dim=1)
 
     return Categorical(logits=flat_logits)
@@ -172,92 +179,70 @@ class RolloutBuffer:
             "values": torch.cat(self.values),
         }
 
+class FixedFrequentAssetRewardFn(FrequentAssetRewardFn):
+    def __call__(self, prior_obs: Observation, prior_action: Action, obs: Observation) -> float:
+        change_in_army_size = obs.owned_army_count - prior_obs.owned_army_count
+        change_in_land_owned = obs.owned_land_count - prior_obs.owned_land_count
+        change_in_num_cities_owned = compute_num_cities_owned(obs) - compute_num_cities_owned(prior_obs)
+        change_in_num_generals_owned = compute_num_generals_owned(obs) - compute_num_generals_owned(prior_obs)
+        
+        # Exploration reward: Reward for revealing fog
+        # fog_cells is 1 for fog, 0 for visible. Decrease in sum means more visible.
+        change_in_fog = np.sum(prior_obs.fog_cells) - np.sum(obs.fog_cells)
+        
+        # FIX: Check if action is pass
+        if prior_action.is_pass():
+            is_valid = True
+            # Discourage passing after the starting phase (e.g., 50 steps)
+            if obs.timestep > 50:
+                valid_action_reward = -2
+            else:
+                valid_action_reward = 1
+        else:
+            is_valid = is_action_valid(prior_action, prior_obs)
+            valid_action_reward = 1 if is_valid else -5
+
+        reward = (
+            valid_action_reward
+            + 0.05 * change_in_army_size
+            + 2.0 * change_in_land_owned
+            + 0.5 * change_in_fog
+            + 10 * change_in_num_cities_owned
+            + 10_000 * change_in_num_generals_owned
+        )
+
+        return reward
+
+
+from collections import deque
+
+# ... existing imports ...
+
 class PPORunner:
     def __init__(self, config_path: str) -> None:
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-
-        self.seed = cfg.get("seed", 42)
-        set_seed(self.seed)
-
-        self.device = torch.device(cfg.get("device", "cpu"))
-        env_cfg = cfg.get("env", {})
-        model_cfg = cfg.get("model", {})
-        ppo_cfg = cfg.get("ppo", {})
-        log_cfg = cfg.get("logging", {})
-
-        self.agents: List[str] = env_cfg.get("agents", ["player_0", "player_1"])
-        self.grid_size: int = env_cfg.get("pad_observations_to", 24)
-        self.truncation: int | None = env_cfg.get("truncation")
-
-        reward_fn = self._make_reward_fn(env_cfg.get("reward_fn", "frequent_asset"))
-
-        self.env = GymnasiumGenerals(
-            agents=self.agents,
-            pad_observations_to=self.grid_size,
-            truncation=self.truncation,
-            reward_fn=reward_fn,
-            render_mode=env_cfg.get("render_mode"),
-        )
-
-        self.model = SOTANetwork(
-            obs_channels=model_cfg.get("obs_channels", 15),
-            memory_channels=model_cfg.get("memory_channels", MEMORY_CHANNELS),
-            grid_size=model_cfg.get("grid_size", self.grid_size),
-            base_channels=model_cfg.get("base_channels", 64),
-        ).to(self.device)
-
-        bc_path = model_cfg.get("bc_checkpoint")
-        if bc_path:
-            self._load_checkpoint_weights(bc_path)
-
-        self.hyper = PPOHyperParams(
-            rollout_length=ppo_cfg.get("rollout_length", 256),
-            total_env_steps=ppo_cfg.get("total_env_steps", 200000),
-            num_minibatches=ppo_cfg.get("num_minibatches", 4),
-            ppo_epochs=ppo_cfg.get("ppo_epochs", 4),
-            gamma=ppo_cfg.get("gamma", 0.99),
-            gae_lambda=ppo_cfg.get("gae_lambda", 0.95),
-            clip_range=ppo_cfg.get("clip_range", 0.2),
-            entropy_coef=ppo_cfg.get("entropy_coef", 0.01),
-            value_coef=ppo_cfg.get("value_coef", 0.5),
-            max_grad_norm=ppo_cfg.get("max_grad_norm", 0.5),
-            learning_rate=ppo_cfg.get("learning_rate", 3e-4),
-        )
-
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hyper.learning_rate)
-        self.buffer = RolloutBuffer()
-
-        self.checkpoint_dir = Path(log_cfg.get("checkpoint_dir", "checkpoints_ppo"))
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self.checkpoint_every = log_cfg.get("checkpoint_every", 10000)
-
-        self.use_swanlab = bool(log_cfg.get("use_swanlab", False)) and swanlab is not None
-        if self.use_swanlab:
-            swanlab.init(
-                project=log_cfg.get("project", "generals-ppo"),
-                experiment_name=log_cfg.get("experiment_name", "ppo-bc"),
-                config=cfg,
-            )
-        elif log_cfg.get("use_swanlab", False):
-            print("Warning: swanlab requested but not installed; proceeding without it.")
-
-        self.log_interval = log_cfg.get("log_interval", 10)
-
-        self.memories: Dict[str, MemoryAugmentation] = {
-            agent: MemoryAugmentation((self.grid_size, self.grid_size)) for agent in self.agents
-        }
+        # ... existing init ...
+        self.memories: List[Dict[str, MemoryAugmentation]] = []
+        for _ in range(self.num_workers):
+            self.memories.append({
+                agent: MemoryAugmentation((self.grid_size, self.grid_size)) for agent in self.agents
+            })
+            
+        # Episode tracking
+        self.episode_returns = deque(maxlen=100)
+        self.episode_lengths = deque(maxlen=100)
+        self.current_episode_return = np.zeros(self.num_workers, dtype=np.float32)
+        self.current_episode_length = np.zeros(self.num_workers, dtype=np.int32)
 
     def _make_reward_fn(self, name: str):
         name = (name or "").lower()
         if name in {"frequent", "frequent_asset", "asset"}:
-            return FrequentAssetRewardFn()
+            return FixedFrequentAssetRewardFn()
         if name in {"land"}:
             return LandRewardFn()
         if name in {"winlose", "win_lose", "wl", "default"}:
             return WinLoseRewardFn()
-        print(f"Unknown reward_fn '{name}', falling back to FrequentAssetRewardFn")
-        return FrequentAssetRewardFn()
+        print(f"Unknown reward_fn '{name}', falling back to FixedFrequentAssetRewardFn")
+        return FixedFrequentAssetRewardFn()
 
     def _load_checkpoint_weights(self, path: str) -> None:
         state = torch.load(path, map_location=self.device, weights_only=False)
@@ -275,6 +260,16 @@ class PPORunner:
             print(f"Loaded BC weights from {path}: all {len(filtered)} tensors loaded.")
         else:
             print(f"Loaded BC weights from {path} with partial match: {len(filtered)}/{len(model_state)} tensors loaded.")
+        
+        # Re-initialize value head to avoid destroying backbone with huge gradients due to scale mismatch
+        # The BC value head is likely trained on a different reward scale (e.g. Win/Loss 0-1)
+        # while our RL reward is much larger (e.g. >100).
+        print("Re-initializing value head to prevent backbone collapse due to reward scale mismatch.")
+        self.model.value_head = type(self.model.value_head)(
+            self.model.value_head.conv[0].conv.in_channels, 
+            self.grid_size
+        ).to(self.device)
+        
         if missing:
             print(f"Warning: {len(missing)} parameters missing in checkpoint (kept model init): {missing[:5]}...")
         if skipped:
@@ -304,92 +299,138 @@ class PPORunner:
         return act, action_array, action_idx, logprob, value.squeeze(-1)
 
     def _reset_memories(self) -> None:
-        for mem in self.memories.values():
-            mem.reset()
+        for env_memories in self.memories:
+            for mem in env_memories.values():
+                mem.reset()
 
-    def collect_rollout(self, start_obs: np.ndarray, start_infos: Dict[str, Any], global_step: int) -> Tuple[np.ndarray, Dict[str, Any], int]:
+    def collect_rollout(self, start_obs: np.ndarray, start_infos: Tuple[Dict[str, Any]], global_step: int) -> Tuple[np.ndarray, Tuple[Dict[str, Any]], int]:
         self.model.eval()
         obs = start_obs
         infos = start_infos
-        steps_collected = 0
-        self.buffer.clear()
+        
+        for buf in self.buffers:
+            buf.clear()
 
-        while steps_collected < self.hyper.rollout_length and global_step < self.hyper.total_env_steps:
-            actions: List[Action] = []
-            action_arrays: Dict[str, np.ndarray] = {}
-            logprobs_step: Dict[str, torch.Tensor] = {}
-            values_step: Dict[str, torch.Tensor] = {}
-            masks_step: Dict[str, torch.Tensor] = {}
-            action_indices_step: Dict[str, int] = {}
-
-            # Compute actions for each agent (self-play using the same policy)
-            for idx, agent in enumerate(self.agents):
-                obs_agent = obs[idx]
-                mem_agent = self.memories[agent].get_memory_features()
-                valid_mask = infos[agent]["masks"]
+        steps_per_worker = self.hyper.rollout_length // self.num_workers
+        
+        for _ in range(steps_per_worker):
+            worker_actions = [[] for _ in range(self.num_workers)]
+            
+            # Temporary storage for player_0 data
+            p0_obs = None
+            p0_mem = None
+            p0_mask = None
+            p0_action = None
+            p0_logprob = None
+            p0_value = None
+            
+            for agent_idx, agent_name in enumerate(self.agents):
+                # Gather data
+                agent_obs_np = obs[:, agent_idx] # (B, C, H, W)
                 
-                # Clone mask immediately to avoid modification by env.step
-                masks_step[agent] = torch.from_numpy(valid_mask).bool().clone()
-
+                agent_memories_np = []
+                for w in range(self.num_workers):
+                    agent_memories_np.append(self.memories[w][agent_name].get_memory_features())
+                agent_memories_np = np.stack(agent_memories_np) # (B, C_mem, H, W)
+                
+                agent_masks_np = []
+                for w in range(self.num_workers):
+                    agent_masks_np.append(infos[w][agent_name]["masks"])
+                agent_masks_np = np.stack(agent_masks_np) # (B, H, W, 4)
+                
+                # Inference
+                obs_t = torch.from_numpy(agent_obs_np).float().to(self.device)
+                mem_t = torch.from_numpy(agent_memories_np).float().to(self.device)
+                
                 with torch.no_grad():
-                    act, act_arr, action_idx, logprob, value = self._action_for_agent(obs_agent, mem_agent, valid_mask)
-                    action_indices_step[agent] = action_idx.item()
+                    policy_logits, value = self.model(obs_t, mem_t)
+                    dist = build_action_distribution(policy_logits, agent_masks_np, self.grid_size)
+                    action_idx = dist.sample()
+                    logprob = dist.log_prob(action_idx)
+                
+                # Store actions for step
+                for w in range(self.num_workers):
+                    idx_val = action_idx[w].item()
+                    to_pass, row, col, direction, split = decode_action_index(idx_val, self.grid_size)
+                    act_arr = np.array([int(to_pass), row, col, direction, split], dtype=np.int8)
+                    worker_actions[w].append(act_arr)
+                
+                # Store data for player_0
+                if agent_name == self.agents[0]:
+                    p0_obs = obs_t
+                    p0_mem = mem_t
+                    p0_mask = torch.from_numpy(agent_masks_np).to(self.device)
+                    p0_action = action_idx
+                    p0_logprob = logprob
+                    p0_value = value.squeeze(-1)
 
-                actions.append(act)
-                action_arrays[agent] = act_arr
-                logprobs_step[agent] = logprob
-                values_step[agent] = value
-
-            next_obs, _, terminated, truncated, next_infos = self.env.step(actions)
-
-            # Reward for learning agent (player_0)
-            reward = float(next_infos[self.agents[0]]["reward"])
-            done_flag = bool(terminated or truncated or next_infos[self.agents[0]]["done"])
-
-            # Store rollout only for learning agent (player_0)
-            # Note: We must store the mask used to generate the action, which comes from 'infos' (start_infos or next_infos from prev step)
-            # The 'infos' variable holds the info for the CURRENT observation 'obs'.
-            # We clone the mask to ensure it's not modified later if it shares memory with numpy array
-            self.buffer.add(
-                obs=torch.from_numpy(obs[0]).float(),
-                memory=torch.from_numpy(self.memories[self.agents[0]].get_memory_features()).float(),
-                mask=masks_step[self.agents[0]],
-                action=logprobs_step[self.agents[0]].detach().new_tensor(action_indices_step[self.agents[0]]),
-                logprob=logprobs_step[self.agents[0]].detach(),
-                value=values_step[self.agents[0]].detach(),
-                reward=reward,
-                done=done_flag,
-            )
-
-            # Update memories using post-step observations
-            for idx, agent in enumerate(self.agents):
-                obs_dict = obs_tensor_to_dict(next_obs[idx])
-                self.memories[agent].update(obs_dict, action_arrays[agent])
-
-            if done_flag:
-                obs, infos = self.env.reset()
-                self._reset_memories()
-            else:
-                obs, infos = next_obs, next_infos
-
-            steps_collected += 1
-            global_step += 1
-
+            # Step environment
+            step_actions = np.stack([np.stack(wa) for wa in worker_actions]) # (B, num_agents, 5)
+            next_obs, _, terminateds, truncateds, next_infos = self.env.step(step_actions)
+            
+            # Process results and store in buffers
+            for w in range(self.num_workers):
+                # Reward for player_0
+                raw_reward = float(next_infos[w][self.agents[0]]["reward"])
+                reward = raw_reward * self.reward_scale
+                done_flag = bool(terminateds[w] or truncateds[w] or next_infos[w][self.agents[0]]["done"])
+                
+                self.current_episode_return[w] += raw_reward
+                self.current_episode_length[w] += 1
+                
+                self.buffers[w].add(
+                    obs=p0_obs[w],
+                    memory=p0_mem[w],
+                    mask=p0_mask[w],
+                    action=p0_action[w],
+                    logprob=p0_logprob[w],
+                    value=p0_value[w],
+                    reward=reward,
+                    done=done_flag
+                )
+                
+                # Handle reset and memory update
+                if done_flag:
+                    self.episode_returns.append(self.current_episode_return[w])
+                    self.episode_lengths.append(self.current_episode_length[w])
+                    self.current_episode_return[w] = 0
+                    self.current_episode_length[w] = 0
+                    
+                    for mem in self.memories[w].values():
+                        mem.reset()
+                else:
+                    for agent_idx, agent_name in enumerate(self.agents):
+                        obs_dict = obs_tensor_to_dict(next_obs[w, agent_idx])
+                        self.memories[w][agent_name].update(obs_dict, worker_actions[w][agent_idx])
+            
+            obs = next_obs
+            infos = next_infos
+            global_step += self.num_workers
+            
         return obs, infos, global_step
 
-    def _compute_last_value(self, obs: np.ndarray, infos: Dict[str, Any]) -> torch.Tensor:
+    def _compute_last_value(self, obs: np.ndarray, infos: Tuple[Dict[str, Any]]) -> torch.Tensor:
         self.model.eval()
-        obs_agent = obs[0]
-        mem_agent = self.memories[self.agents[0]].get_memory_features()
-        obs_t, mem_t = self._prepare_tensors(obs_agent, mem_agent)
+        agent_idx = 0
+        agent_name = self.agents[0]
+        
+        obs_agent = obs[:, agent_idx]
+        
+        mem_agent = []
+        for w in range(self.num_workers):
+            mem_agent.append(self.memories[w][agent_name].get_memory_features())
+        mem_agent = np.stack(mem_agent)
+        
+        obs_t = torch.from_numpy(obs_agent).float().to(self.device)
+        mem_t = torch.from_numpy(mem_agent).float().to(self.device)
+        
         with torch.no_grad():
             policy_logits, value = self.model(obs_t, mem_t)
-        return value.detach()
+        return value.detach().squeeze(-1)
 
-    def update(self, advantages: torch.Tensor, returns: torch.Tensor) -> Dict[str, float]:
+    def update(self, batch: Dict[str, torch.Tensor], advantages: torch.Tensor, returns: torch.Tensor) -> Dict[str, float]:
         # Keep model in eval mode to ensure consistency with rollout (BatchNorm/Dropout)
         self.model.eval()
-        batch = self.buffer.get_batch()
         batch_size = batch["obs"].shape[0]
         minibatch_size = batch_size // self.hyper.num_minibatches
 
@@ -438,8 +479,22 @@ class PPORunner:
                 pg_loss2 = -advantages_mb * torch.clamp(ratio, 1 - self.hyper.clip_range, 1 + self.hyper.clip_range)
                 policy_loss = torch.max(pg_loss1, pg_loss2).mean()
 
+                # Value loss clipping
                 values = values.view(-1)
-                value_loss = F.mse_loss(values, returns_mb)
+                # old_values_mb = batch["values"][mb_idx].to(self.device) # We need old values for clipping
+                # But buffer stores 'values' which are the old values.
+                # Wait, batch["values"] IS the old value prediction from rollout.
+                old_values_mb = batch["values"][mb_idx].to(self.device)
+                
+                v_loss_unclipped = (values - returns_mb) ** 2
+                v_clipped = old_values_mb + torch.clamp(
+                    values - old_values_mb,
+                    -self.hyper.clip_range,
+                    self.hyper.clip_range,
+                )
+                v_loss_clipped = (v_clipped - returns_mb) ** 2
+                v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                value_loss = 0.5 * v_loss_max.mean()
 
                 loss = policy_loss + self.hyper.value_coef * value_loss - self.hyper.entropy_coef * entropy
 
@@ -480,12 +535,44 @@ class PPORunner:
 
         while global_step < self.hyper.total_env_steps:
             obs, infos, global_step = self.collect_rollout(obs, infos, global_step)
-            avg_reward = torch.cat(self.buffer.rewards).mean().item()
-            last_value = self._compute_last_value(obs, infos)
-            advantages, returns = self.buffer.compute_advantages(last_value, self.hyper.gamma, self.hyper.gae_lambda)
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            
+            last_values = self._compute_last_value(obs, infos)
+            
+            all_advantages = []
+            all_returns = []
+            
+            for w in range(self.num_workers):
+                last_val = last_values[w]
+                adv, ret = self.buffers[w].compute_advantages(last_val, self.hyper.gamma, self.hyper.gae_lambda)
+                all_advantages.append(adv)
+                all_returns.append(ret)
+            
+            flat_advantages = torch.cat(all_advantages)
+            flat_returns = torch.cat(all_returns)
+            
+            # Normalize advantages
+            flat_advantages = (flat_advantages - flat_advantages.mean()) / (flat_advantages.std() + 1e-8)
+            
+            # Merge buffers
+            merged_batch = {
+                "obs": [], "memory": [], "masks": [], "actions": [], "logprobs": [], "values": []
+            }
+            
+            for w in range(self.num_workers):
+                b = self.buffers[w].get_batch()
+                for k in merged_batch:
+                    merged_batch[k].append(b[k])
+            
+            for k in merged_batch:
+                merged_batch[k] = torch.cat(merged_batch[k])
 
-            metrics = self.update(advantages, returns)
+            avg_reward = torch.cat([torch.cat(b.rewards) for b in self.buffers]).mean().item()
+            raw_reward = avg_reward / self.reward_scale
+            
+            episodic_return_mean = np.mean(self.episode_returns) if len(self.episode_returns) > 0 else 0.0
+            episodic_length_mean = np.mean(self.episode_lengths) if len(self.episode_lengths) > 0 else 0.0
+
+            metrics = self.update(merged_batch, flat_advantages, flat_returns)
 
             if self.use_swanlab:
                 swanlab.log({
@@ -496,6 +583,9 @@ class PPORunner:
                     "train/clip_rate": metrics["clip_rate"],
                     "train/ratio_mean": metrics["ratio_mean"],
                     "train/reward_mean": avg_reward,
+                    "train/raw_reward_mean": raw_reward,
+                    "train/episodic_return_mean": episodic_return_mean,
+                    "train/episodic_length_mean": episodic_length_mean,
                     "train/step": global_step,
                 })
 
@@ -507,6 +597,7 @@ class PPORunner:
                     "policy_loss": metrics["policy_loss"],
                     "value_loss": metrics["value_loss"],
                     "entropy": metrics["entropy"],
+                    "ep_ret": episodic_return_mean,
                 })
             progress.update(self.hyper.rollout_length)
 
