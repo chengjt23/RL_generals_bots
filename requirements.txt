@@ -1,0 +1,7 @@
+torch
+numpy
+tqdm
+pyyaml
+swanlab
+gymnasium
+generals-bots

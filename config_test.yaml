@@ -1,0 +1,35 @@
+device: cuda
+env:
+  agents:
+  - player_0
+  - player_1
+  pad_observations_to: 24
+  render_mode: null
+  reward_fn: frequent_asset
+  truncation: 500
+logging:
+  checkpoint_dir: checkpoints_ppo
+  checkpoint_every: 10000
+  experiment_name: ppo-bc-finetune
+  log_interval: 10
+  project: generals-ppo
+  use_swanlab: false
+model:
+  base_channels: 64
+  bc_checkpoint: /root/shared-nvme/oyx_new/RL_generals_bots/model/epoch_37_loss_1.7065.pt
+  grid_size: 24
+  memory_channels: 13
+  obs_channels: 15
+ppo:
+  clip_range: 0.2
+  entropy_coef: 0.01
+  gae_lambda: 0.95
+  gamma: 0.99
+  learning_rate: 0.0003
+  max_grad_norm: 0.5
+  num_minibatches: 4
+  ppo_epochs: 4
+  rollout_length: 256
+  total_env_steps: 200000
+  value_coef: 0.5
+seed: 42
