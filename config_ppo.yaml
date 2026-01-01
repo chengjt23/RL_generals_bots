@@ -33,6 +33,8 @@ ppo:
   anneal_lr: true
   reward_scale: 0.001
   num_workers: 8
+  eval_vs_bc_ratio: 0.25
+  warmup_games: 50
 
 logging:
   use_swanlab: true

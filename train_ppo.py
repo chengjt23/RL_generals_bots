@@ -293,6 +293,7 @@ class PPORunner:
             swanlab.init(
                 project=log_cfg.get("project", "generals-ppo"),
                 experiment_name=log_cfg.get("experiment_name", "ppo-bc"),
+                workspace="coc",
                 config=cfg,
             )
         elif log_cfg.get("use_swanlab", False):
@@ -316,6 +317,32 @@ class PPORunner:
         self.episode_reward_per_step = deque(maxlen=100)
         self.current_episode_return = np.zeros(self.num_workers, dtype=np.float32)
         self.current_episode_length = np.zeros(self.num_workers, dtype=np.int32)
+        
+        # BC model for evaluation
+        self.bc_model = None
+        eval_vs_bc_ratio = ppo_cfg.get("eval_vs_bc_ratio", 0.25)
+        if bc_path:
+            self.bc_model = SOTANetwork(
+                obs_channels=model_cfg.get("obs_channels", 15),
+                memory_channels=model_cfg.get("memory_channels", MEMORY_CHANNELS),
+                grid_size=model_cfg.get("grid_size", self.grid_size),
+                base_channels=model_cfg.get("base_channels", 64),
+            ).to(self.device)
+            self.bc_model.load_state_dict(self.model.state_dict())
+            for param in self.bc_model.parameters():
+                param.requires_grad = False
+            self.bc_model.eval()
+            print(f"BC model loaded for evaluation. {int(eval_vs_bc_ratio * 100)}% of workers will play against BC.")
+        
+        self.episode_wins_vs_bc = deque(maxlen=100)
+        self.eval_vs_bc_ratio = eval_vs_bc_ratio
+        if self.bc_model is not None:
+            num_vs_bc = max(1, int(self.num_workers * eval_vs_bc_ratio))
+            self.worker_is_vs_bc = [(i < num_vs_bc) for i in range(self.num_workers)]
+        else:
+            self.worker_is_vs_bc = [False] * self.num_workers
+        
+        self.warmup_games = ppo_cfg.get("warmup_games", 50)
 
     def _make_reward_fn(self, name: str):
         name = (name or "").lower()
@@ -427,6 +454,13 @@ class PPORunner:
                 
                 with torch.no_grad():
                     policy_logits, value = self.model(obs_t, mem_t)
+                    
+                    if self.bc_model is not None and agent_name == self.agents[1]:
+                        bc_logits, _ = self.bc_model(obs_t, mem_t)
+                        for w in range(self.num_workers):
+                            if self.worker_is_vs_bc[w]:
+                                policy_logits[w] = bc_logits[w]
+                    
                     dist = build_action_distribution(policy_logits, agent_masks_np, self.grid_size)
                     action_idx = dist.sample()
                     logprob = dist.log_prob(action_idx)
@@ -511,6 +545,9 @@ class PPORunner:
                         self.episode_wins.append(0)
                         self.episode_ties.append(0)
                         self.episode_losses.append(1)
+                    
+                    if self.worker_is_vs_bc[w]:
+                        self.episode_wins_vs_bc.append(1 if is_winner else 0)
                     
                     if self.current_episode_length[w] > 0:
                         self.episode_reward_per_step.append(self.current_episode_return[w] / self.current_episode_length[w])
@@ -654,6 +691,43 @@ class PPORunner:
         global_step = 0
         self._reset_memories()
 
+        if self.bc_model is not None and self.warmup_games > 0:
+            print(f"Starting warmup: Collecting {self.warmup_games} games vs BC baseline...")
+            
+            original_worker_is_vs_bc = self.worker_is_vs_bc.copy()
+            self.worker_is_vs_bc = [True] * self.num_workers
+            
+            warmup_pbar = tqdm(total=self.warmup_games, desc="Warmup (PPO vs BC)", unit="game")
+            last_completed_games = 0
+            
+            while len(self.episode_wins_vs_bc) < self.warmup_games:
+                obs, infos, _ = self.collect_rollout(obs, infos, 0)
+                
+                current_completed = len(self.episode_wins_vs_bc)
+                warmup_pbar.update(current_completed - last_completed_games)
+                last_completed_games = current_completed
+            
+            warmup_pbar.close()
+            
+            initial_wr = np.mean(self.episode_wins_vs_bc) if len(self.episode_wins_vs_bc) > 0 else 0.5
+            initial_ep_win_rate = np.mean(self.episode_wins) if len(self.episode_wins) > 0 else 0.5
+            
+            if self.use_swanlab:
+                swanlab.log({
+                    "train/win_rate_to_bc": initial_wr,
+                    "train/step": 0,
+                    "train/episodic_win_rate": initial_ep_win_rate,
+                })
+            
+            print(f"Warmup finished. Initial Win Rate vs BC: {initial_wr:.4f}")
+            
+            self.worker_is_vs_bc = original_worker_is_vs_bc
+            for buf in self.buffers:
+                buf.clear()
+            
+            obs, infos = self.env.reset()
+            self._reset_memories()
+
         progress = tqdm(total=self.hyper.total_env_steps, desc="PPO Training", unit="step")
 
         while global_step < self.hyper.total_env_steps:
@@ -703,11 +777,12 @@ class PPORunner:
             episodic_tie_rate = np.mean(self.episode_ties) if len(self.episode_ties) > 0 else 0.0
             episodic_loss_rate = np.mean(self.episode_losses) if len(self.episode_losses) > 0 else 0.0
             episodic_reward_per_step_mean = np.mean(self.episode_reward_per_step) if len(self.episode_reward_per_step) > 0 else 0.0
+            episodic_win_rate_vs_bc = np.mean(self.episode_wins_vs_bc) if len(self.episode_wins_vs_bc) > 0 else 0.0
 
             metrics = self.update(merged_batch, flat_advantages, flat_returns)
 
             if self.use_swanlab:
-                swanlab.log({
+                log_dict = {
                     "train/policy_loss": metrics["policy_loss"],
                     "train/value_loss": metrics["value_loss"],
                     "train/entropy": metrics["entropy"],
@@ -723,7 +798,10 @@ class PPORunner:
                     "train/episodic_loss_rate": episodic_loss_rate,
                     "train/episodic_reward_per_step_mean": episodic_reward_per_step_mean,
                     "train/step": global_step,
-                })
+                }
+                if self.bc_model is not None:
+                    log_dict["train/win_rate_to_bc"] = episodic_win_rate_vs_bc
+                swanlab.log(log_dict)
 
             if global_step % self.checkpoint_every == 0:
                 self.save_checkpoint(global_step)
